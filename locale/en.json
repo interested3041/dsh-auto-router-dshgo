@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Bailian auto router",
+    "description": "Registers the virtual model bailian-auto that analyzes each request with a decision model, then routes to the best Aliyun Bailian execution model with quota-aware cooldowns and silent fallback.",
+    "detail": "docs/DETAIL.md"
+  }
+}
