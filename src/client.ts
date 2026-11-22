@@ -1142,8 +1142,11 @@
           h('div', { className: 'bar-row', style: { justifyContent: 'space-between' } },
             h('strong', null, '智能路由'),
             h('span', { className: 'bar-muted', style: { cursor: 'pointer' }, onClick: () => setOpen(false) }, '收起')),
-          h('div', { className: 'bar-muted', style: { margin: '4px 0' } },
-            st ? `模型池 ${st.pool?.count ?? 0} · 冷却 ${cooling} · 台账 ${st.keyLedger?.totalTokens ?? 0} tok` : '状态载入中…'),
+          h('div', {
+            className: 'bar-muted', style: { margin: '4px 0' },
+            title: st?.keyLedger ? `当前 key:${st.keyLedger.label}` : undefined,
+          },
+            st ? `模型池 ${st.pool?.count ?? 0} · 冷却 ${cooling} · 台账 ${st.keyLedger?.totalTokens ?? 0} tok${(st.ledgersTotal ?? 0) !== (st.keyLedger?.totalTokens ?? 0) ? `(累计 ${st.ledgersTotal})` : ''}` : '状态载入中…'),
           last ? h('div', { className: 'bar-muted bar-mono', style: { fontSize: '11px', marginBottom: '4px', wordBreak: 'break-all' } }, `上次 ${last.finalModel ?? '—'} · ${last.tokens ?? 0} tok`) : null,
           h('div', { className: 'bar-row', style: { gap: '4px' } },
             h('select', {
@@ -1180,7 +1183,13 @@
           }
           ctx.effect(() => () => { try { unmount?.() } catch (_e) { /* already gone */ } }, `${PACKAGE}: remote contribution`)
 
-          ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
+          // 0.7.3: 逐槽容错注册——移动宿主若缺某个 slot,只少对应组件,不连累面板。
+          const injectSlot = (slot: string, register: () => unknown): void => {
+            try { ctx.slots.inject(slot, register) } catch (error) {
+              ctx.logger?.warn?.(`${PACKAGE}: slot ${slot} 不可用:${String((error as Error)?.message ?? error)}`)
+            }
+          }
+          injectSlot('settings.models.footer', () => ctx.slots.register({
             name: 'settings.models.footer', id: 'auto-router-status', order: 50,
           }, FooterCard))
 
@@ -1193,12 +1202,12 @@
             ctx.logger?.warn?.(`${PACKAGE}: remote.${NS} unavailable — the built-in configuration form is used instead`)
             return
           }
-          ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
+          injectSlot('plugins.bundle.config', () => ctx.slots.register({
             name: 'plugins.bundle.config', key: PACKAGE, inject: () => ({ ctx }),
           }, (props: any) => h(Panel, { ...props, ctx })))
 
           // 0.7.2: 主页/全应用右下角浮窗(shell.overlay 为追加式浮层,不遮挡底层)。
-          ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          injectSlot('shell.overlay', () => ctx.slots.register({
             name: 'shell.overlay', id: 'auto-router-float', order: 60, label: '智能路由',
           }, FloatCard))
         },

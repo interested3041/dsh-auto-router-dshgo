@@ -187,6 +187,8 @@ export interface RouterStateView {
   connections: { id: string; name: string; providerId: string; baseURL: string; credentialRef: string | null }[]
   /** Local ledger summary for the active key. */
   keyLedger: { keyId: string; label: string; totalTokens: number; cycle: number }
+  /** Sum of totalTokens over all key ledgers (float shows 累计 when it differs). */
+  ledgersTotal: number
   /** Same-endpoint older key whose ledger could be inherited, when current is empty. */
   inheritSuggestion: { fromKeyId: string; label: string; totalTokens: number } | null
 }
@@ -587,6 +589,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
       baseURL: connection.baseURL, credentialRef: connection.credentialRef ?? null,
     })),
     keyLedger: { keyId: activeKeyId, label: activeLedger.label, totalTokens: activeLedger.totalTokens, cycle: activeLedger.cycle },
+    ledgersTotal: Object.values(store.state.ledgers).reduce((sum, ledger) => sum + ledger.totalTokens, 0),
     inheritSuggestion: inheritFrom == null ? null : { fromKeyId: inheritFrom.keyId, label: inheritFrom.label, totalTokens: inheritFrom.totalTokens },
   }
 }
@@ -822,14 +825,14 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
       await store.ready
       if (typeof fromKeyId !== 'string' || typeof toKeyId !== 'string') throw new Error('key ids must be strings')
       const ok = store.inheritLedger(fromKeyId, toKeyId)
-      if (!ok) throw new Error('source ledger not found')
+      if (!ok) throw new Error('未找到源台账(可能已被重置)')
       return stateView(ctx, router, store)
     },
     async checkUpdate() {
       return checkLatest()
     },
     async applyUpdate(tag: string) {
-      if (typeof tag !== 'string' || !/^v?\d+\.\d+\.\d+/.test(tag)) throw new Error('tag must be a semver like 0.6.1')
+      if (typeof tag !== 'string' || !/^v?\d+\.\d+\.\d+/.test(tag)) throw new Error('版本号格式不对,应形如 0.7.3')
       return applyUpdate(tag)
     },
   }
