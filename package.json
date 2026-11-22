@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-router-dshgo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek Harness 移动端(dshgo)多厂商智能路由插件:注册虚拟模型 bailian-auto,单 API key 下由决策模型按任务自动路由到最合适的执行模型;支持百炼/硅基流动/OpenRouter/火山方舟/智谱等单key多模型平台,内置额度感知、冷却回退、负载均衡与失败静默切换。Mobile (dshgo) port of dsh-auto-router: vendor-neutral decision-model router, one API key many models, quota-aware cooldown, load balancing and silent fallback.",
   "type": "module",
   "main": "lib/index.js",
@@ -45,7 +45,7 @@
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && node scripts/postbuild.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "smoke": "node test/smoke.mjs",
-    "test": "node test/smoke.mjs && node test/classify.test.mjs && node test/router.test.mjs && node test/account.test.mjs && node test/accounts.test.mjs && node test/vendors.test.mjs && node test/behavior.test.mjs && node test/token-ledger.test.mjs && node test/account-identity.test.mjs && node test/strategy-user.test.mjs && node test/quota-connections.test.mjs",
+    "test": "node test/smoke.mjs && node test/classify.test.mjs && node test/router.test.mjs && node test/account.test.mjs && node test/accounts.test.mjs && node test/vendors.test.mjs && node test/behavior.test.mjs && node test/token-ledger.test.mjs && node test/account-identity.test.mjs && node test/strategy-user.test.mjs && node test/quota-connections.test.mjs && node test/update.test.mjs",
     "test:live": "node test/live.mjs",
     "prepublishOnly": "npm run build && npm test"
   },

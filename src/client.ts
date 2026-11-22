@@ -26,6 +26,8 @@
     clearHistory(): Promise<any>
     pinUserModel(model: string): Promise<any>
     inheritKeyLedger(fromKeyId: string, toKeyId: string): Promise<any>
+    checkUpdate(): Promise<any>
+    applyUpdate(tag: string): Promise<any>
     switchConnection(entryId: string, providerId: string): Promise<any>
     upsertAccount(account: Record<string, unknown>): Promise<any>
     removeAccount(id: string): Promise<any>
@@ -98,6 +100,8 @@
           { ...endpoint('clearHistory'), parameters: [], result: codec('RouterState', asObject) },
           { ...endpoint('pinUserModel'), parameters: [param('model', 'ModelId', anyValue)], result: codec('RouterState', asObject) },
           { ...endpoint('inheritKeyLedger'), parameters: [param('fromKeyId', 'String', anyValue), param('toKeyId', 'String', anyValue)], result: codec('RouterState', asObject) },
+          { ...endpoint('checkUpdate'), parameters: [], result: codec('UpdateInfo', asObject) },
+          { ...endpoint('applyUpdate'), parameters: [param('tag', 'String', anyValue)], result: codec('UpdateResult', asObject) },
           { ...endpoint('selfCheck'), parameters: [], result: codec('SelfCheckResult', asObject) },
           {
             ...endpoint('switchConnection'),
@@ -189,6 +193,12 @@
         const [acctForm, setAcctForm] = useState<any>({ id: '', name: '', baseURL: '', apiKey: '', apiKeyEnv: '' })
         const [tab, setTab] = useState<'account' | 'route' | 'pool' | 'log'>('account')
         const show = (name: string) => tab === name
+        const [upd, setUpd] = useState<any>(null)
+        const checkUpdate = useCallback(async () => {
+          if (!remote) return
+          try { setUpd(unwrap(await remote.checkUpdate())) } catch (_e) { /* offline: ignore */ }
+        }, [remote])
+        useEffect(() => { void checkUpdate() }, [checkUpdate])
         const alive = useRef(true)
         useEffect(() => () => { alive.current = false }, [])
 
@@ -408,6 +418,23 @@
                 key, className: tab === key ? 'bar-btn bar-btn-primary' : 'bar-btn', role: 'button',
                 onClick: () => setTab(key as any),
               }, label))),
+
+          // ---- self update (0.6.1) ----
+          show('account') && h('div', { className: 'bar-card' },
+            h('div', { className: 'bar-row' },
+              h('h4', null, T('插件更新', 'Plugin update')),
+              upd?.hasUpdate ? h(Badge, { tone: 'warn', text: T('有可用更新', 'Update available') }) : h(Badge, { tone: 'ok', text: T('已是最新', 'Up to date') }),
+              h('span', { className: 'bar-muted bar-mono' }, `${T('当前', 'Current')} ${upd?.current ?? '…'} → ${T('最新', 'Latest')} ${upd?.latest ?? '…'}`),
+            ),
+            h('div', { className: 'bar-row' },
+              h('div', { className: 'bar-btn', role: 'button', onClick: () => void checkUpdate() }, T('检查更新', 'Check for updates')),
+              upd?.hasUpdate ? h('div', {
+                className: 'bar-btn bar-btn-primary', role: 'button',
+                onClick: () => void mutate(() => remote.applyUpdate(upd.latest), T('更新已启动,宿主将自动重启(停→部署→启动→校验)', 'Updater started; host will restart (stop→deploy→start→verify)')),
+              }, T('更新到 v', 'Update to v') + upd.latest) : null,
+              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('更新会先停 DSH 再覆盖并重启,不会在运行中覆盖文件。', 'Update stops DSH first, then redeploy & restart; never overwrites live files.')),
+            ),
+          ),
 
           // ---- overview ----
           show('account') && h('div', { className: 'bar-card' },

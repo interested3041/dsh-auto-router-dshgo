@@ -43,6 +43,8 @@ const REMOTE_METHODS = [
   'clearHistory',
   'pinUserModel',
   'inheritKeyLedger',
+  'checkUpdate',
+  'applyUpdate',
 ] as const
 
 /**
@@ -70,6 +72,8 @@ function remoteClass(impl: BailianRouterService) {
     clearHistory() { return impl.clearHistory() }
     pinUserModel(model: string) { return impl.pinUserModel(model) }
     inheritKeyLedger(fromKeyId: string, toKeyId: string) { return impl.inheritKeyLedger(fromKeyId, toKeyId) }
+    checkUpdate() { return impl.checkUpdate() }
+    applyUpdate(tag: string) { return impl.applyUpdate(tag) }
   }
 }
 

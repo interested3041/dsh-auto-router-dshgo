@@ -13,6 +13,7 @@ import type { ConfigModel, SavedAccount } from './config.js'
 import { invalidateConnectionCache, listConnections } from './connection.js'
 import { accountKeyId, connectionLabel, dedupeConnections, resolveKeyId } from './identity.js'
 import { priceOf } from './strategy.js'
+import { applyUpdate, checkLatest, type UpdateInfo } from './update.js'
 import type { HostContext } from './context.js'
 import { BailianClient } from './http.js'
 import { apiKeyConfigured, resolveApiKey } from './router.js'
@@ -608,6 +609,10 @@ export interface BailianRouterService {
   pinUserModel(model: string): Promise<RouterStateView>
   /** Merge an older same-endpoint key's ledger into the active key. */
   inheritKeyLedger(fromKeyId: string, toKeyId: string): Promise<RouterStateView>
+  /** Check GitHub Releases for a newer version (current vs latest). */
+  checkUpdate(): Promise<UpdateInfo>
+  /** Launch the detached self-updater (stop -> deploy -> start -> verify). */
+  applyUpdate(tag: string): Promise<{ started: boolean; message: string }>
   resetQuota(model?: string): Promise<RouterStateView>
   clearHistory(): Promise<RouterStateView>
 }
@@ -816,6 +821,13 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
       const ok = store.inheritLedger(fromKeyId, toKeyId)
       if (!ok) throw new Error('source ledger not found')
       return stateView(ctx, router, store)
+    },
+    async checkUpdate() {
+      return checkLatest()
+    },
+    async applyUpdate(tag: string) {
+      if (typeof tag !== 'string' || !/^v?\d+\.\d+\.\d+/.test(tag)) throw new Error('tag must be a semver like 0.6.1')
+      return applyUpdate(tag)
     },
   }
 }
