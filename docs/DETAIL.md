@@ -48,7 +48,11 @@
 
 `~/.dsh/auto-router/state.json`（0.7.1 起自动迁移旧目录 `bailian-auto-router`；tmp + rename 原子写，单进程保证）。
 
+`~/.dsh/auto-router/prefs.json`（0.8.0 起）：用户设置持久层。宿主配置全为 volatile、重启不序列化，
+故面板/浮窗的每次成功编辑（排序、账号、连接中文名、限额、保存的账号等）都会镜像写入 prefs.json，
+激活时水合回 volatile 引用；prefs 校验失败自动回退忽略，不破坏激活。与 profile 配置同级信任（含密钥，仅本机），不进日志/RPC/state.json。
+
 ## 测试
 
-`npm test` 共 441 条断言（冒烟 / 分类 / 路由 / 换账号 / 多账号 / 多厂商 / 行为 / 台账 / 身份 / 策略 / 额度连接 / 自检更新）；
+`npm test` 共 460 条断言（冒烟 / 分类 / 路由 / 换账号 / 多账号 / 多厂商 / 行为 / 台账 / 身份 / 策略 / 额度连接 / 自检更新 / 设置持久化）；
 `npm run test:live` 用本机真实凭据跑完整链路（会计费，按需）。

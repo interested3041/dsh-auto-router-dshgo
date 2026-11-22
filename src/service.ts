@@ -14,6 +14,7 @@ import { invalidateConnectionCache, listConnections } from './connection.js'
 import { accountKeyId, connectionLabel, dedupeConnections, resolveKeyId } from './identity.js'
 import { priceOf } from './strategy.js'
 import { applyUpdate, checkLatest, type UpdateInfo } from './update.js'
+import { savePrefs } from './prefs.js'
 import type { HostContext } from './context.js'
 import { BailianClient } from './http.js'
 import { apiKeyConfigured, resolveApiKey } from './router.js'
@@ -624,14 +625,24 @@ export interface BailianRouterService {
 }
 
 /** Create the RPC service over the router and store. */
-export function createService(ctx: HostContext, router: Router, store: RouterStore): BailianRouterService {
+export function createService(ctx: HostContext, router: Router, store: RouterStore, prefsFile?: string): BailianRouterService {
   const persist = async (mutate: (current: Record<string, unknown>) => Record<string, unknown>): Promise<void> => {
     const editor = ctx.get('configEditor')
     const entry = ctx.fiber.entry
     if (editor === undefined || entry === undefined) {
       throw new Error('当前部署不支持在线保存配置(configEditor 不可用);请直接编辑 profile 的 cordis.patch.yml 中本插件的 config')
     }
-    await editor.edit(entry, mutate)
+    let captured: Record<string, unknown> | undefined
+    await editor.edit(entry, (current) => {
+      captured = mutate(current)
+      return captured
+    })
+    // 0.8.0: mirror the resulting config into prefs.json so edits survive restarts.
+    if (prefsFile !== undefined && captured !== undefined) {
+      try { savePrefs(prefsFile, captured) } catch (error) {
+        ctx.logger.warn(`[dsh-auto-router-dshgo] prefs.json 写入失败:${String((error as Error)?.message ?? error)}`)
+      }
+    }
   }
   const editConfig = async (patch: ConfigPatch): Promise<RouterStateView> => {
     const sanitized = sanitizePatch(patch)
@@ -837,3 +848,4 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
     },
   }
 }
+

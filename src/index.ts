@@ -16,6 +16,7 @@ import { invalidateConnectionCache } from './connection.js'
 import type { HostContext } from './context.js'
 import { dshHomePath } from './home.js'
 import { provideRemoteService } from './remote.js'
+import { hydrateConfig, loadPrefs } from './prefs.js'
 import { Router } from './router.js'
 import { createService } from './service.js'
 import { RouterStore } from './store.js'
@@ -37,9 +38,6 @@ const INITIAL_SYNC_DELAY_MS = 5_000
 
 /** Plugin activation: register adapter, RPC service, and pool-sync timers. */
 export function apply(ctx: HostContext, config: Config): void {
-  // Fail loud on an unusable configuration at load time.
-  resolveOptions(config)
-
   // One-time migration of the legacy state directory (pre-0.7.1 name). If the
   // legacy dir is still held open by another running host, keep using it.
   const stateHome = dshHomePath('auto-router')
@@ -47,7 +45,22 @@ export function apply(ctx: HostContext, config: Config): void {
   try {
     if (!existsSync(stateHome) && existsSync(legacyHome)) renameSync(legacyHome, stateHome)
   } catch { /* legacy dir in use; fall back below */ }
-  const store = RouterStore.create(join(existsSync(stateHome) ? stateHome : legacyHome, 'state.json'))
+  const stateDir = existsSync(stateHome) ? stateHome : legacyHome
+
+  // 0.8.0: volatile config never survives a host restart; re-hydrate the
+  // plugin-owned prefs.json so panel choices (sort/account/renames/limits)
+  // persist. Invalid prefs are rolled back rather than breaking activation.
+  const prefsFile = join(stateDir, 'prefs.json')
+  const rollback = hydrateConfig(config as unknown as Record<string, any>, loadPrefs(prefsFile))
+  try {
+    // Fail loud on an unusable configuration at load time.
+    resolveOptions(config)
+  } catch (error) {
+    rollback()
+    resolveOptions(config)
+    ctx.logger.warn(`${LOG} prefs.json 校验失败,已回退忽略:${String((error as Error)?.message ?? error)}`)
+  }
+  const store = RouterStore.create(join(stateDir, 'state.json'))
   const router = new Router(ctx, config, store)
   const adapter = new BailianAutoAdapter(router)
 
@@ -57,7 +70,7 @@ export function apply(ctx: HostContext, config: Config): void {
   // RPC surface for the Web panel. The binding marks this Service in source
   // (typertRemote + prototype markers) so the Gateway resolves it without a
   // generated `./typert` artifact.
-  provideRemoteService(ctx, createService(ctx, router, store))
+  provideRemoteService(ctx, createService(ctx, router, store, prefsFile))
 
 
   // First-install pool bootstrap and periodic refresh (local state only; no
