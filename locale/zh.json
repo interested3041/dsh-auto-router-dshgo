@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "百炼智能路由",
-    "description": "注册虚拟模型 bailian-auto,由决策模型分析输入的模态与任务类型,自动路由到最合适的阿里云百炼执行模型;内置额度感知冷却、静默回退与失败切换。",
+    "title": "智能路由 Auto Router",
+    "description": "注册虚拟模型 bailian-auto(显示名「智能路由 Auto Router」)。单 key 多模型:决策模型分析模态与任务类型后,路由到同一账号下最合适的执行模型;支持百炼/硅基流动/OpenRouter/火山方舟/智谱/Moonshot/DeepSeek 等 OpenAI 兼容厂商;内置额度感知冷却、静默回退与失败切换;移动端无 fs 时图片改 data URI 兜底。",
     "detail": "docs/DETAIL.md"
   }
 }

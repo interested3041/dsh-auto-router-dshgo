@@ -434,7 +434,7 @@
 
           // ---- API account management ----
           h('div', { className: 'bar-card' },
-            h('h4', null, T('API 账号管理(添加 / 切换多个百炼账号)', 'API accounts (add / switch Bailian accounts)')),
+            h('h4', null, T('API 账号管理(添加 / 切换多厂商账号)', 'API accounts (add / switch multi-vendor accounts)')),
             h('div', { className: 'bar-muted', style: { fontSize: '11px' } }, T(
               'Key 以 secret 形式存于本机配置,面板打码显示,绝不写入 state.json 或日志;也可只填凭据引用(环境变量名)。',
               'Keys are stored as secrets in local config, masked here, never in state.json or logs; a credential ref (env name) also works.',

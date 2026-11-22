@@ -417,7 +417,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
   return {
     provider: 'bailian-auto',
     model: 'bailian-auto',
-    modelName: '百炼智能路由',
+    modelName: '智能路由 Auto Router',
     config: {
       baseURL: options.baseURL,
       apiKeyEnv: options.apiKeyEnv,

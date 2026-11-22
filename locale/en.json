@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Bailian auto router",
-    "description": "Registers the virtual model bailian-auto that analyzes each request with a decision model, then routes to the best Aliyun Bailian execution model with quota-aware cooldowns and silent fallback.",
+    "title": "Auto Router",
+    "description": "Registers the virtual model bailian-auto (display name Auto Router). One key, many models: a decision model analyzes modality and task type, then routes to the best execution model under the same account; supports Bailian / SiliconFlow / OpenRouter / Volcengine / Zhipu / Moonshot / DeepSeek and any OpenAI-compatible vendor, with quota-aware cooldowns and silent fallback; mobile falls back to data URIs when fs is unavailable.",
     "detail": "docs/DETAIL.md"
   }
 }
