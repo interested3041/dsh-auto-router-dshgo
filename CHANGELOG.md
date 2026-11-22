@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1] - 2026-11-22
+
+### 修复(紧急)
+
+- **组件激活失败 / ERR_MODULE_NOT_FOUND**:`cordis.patch.yml` 的 `name` 仍写旧包名 `dsh-bailian-auto-router`,
+  导致 DSH import 旧包失败、组件不激活。现 `name` 改为 `dsh-auto-router-dshgo`,row `id` 改为 `auto-router-dshgo`。
+- README 目录结构表同步桌面版修正(移除 rpc/typert,补 remote/vendors/home)。
+
 ## [0.1.0] - 2026-11-21
 
 ### 新增

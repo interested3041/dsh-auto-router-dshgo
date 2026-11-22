@@ -208,7 +208,9 @@ npm run test:live  # 用本机真实凭据与端点跑通完整链路（会计�
 | `src/media.ts` | 图像生成落盘与 Markdown 回传 |
 | `src/store.ts` | 本地状态：池、冷却、用量、会话绑定、能力学习 |
 | `src/connection.ts` | 从 profile 已有接入发现并沿用连接 |
-| `src/service.ts` / `src/typert.host.ts` / `src/rpc.ts` | RPC 服务、Typert 清单、边界解析器 |
+| `src/service.ts` / `src/remote.ts` | RPC 服务与通用 codec 透传 |
+| `src/vendors.ts` | 多厂商预设、端点自动识别、思考参数风格 |
+| `src/home.ts` | DSH home 路径解析（移动端兜底） |
 | `src/client.ts` | Web 配置 + 状态面板（经典脚本 bundle） |
 
 ## 已知限制

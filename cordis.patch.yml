@@ -1,7 +1,7 @@
-# dsh-bailian-auto-router bundle patch: one host row over the Web or Desktop profile.
+# dsh-auto-router-dshgo bundle patch: one host row over the mobile (dshgo) profile.
 # The row name resolves from the profile's own node_modules where
 # `dsh plugin --profile <profile> add <path|npm|github>` installed this package.
 - insert:
-    - id: bailian-auto-router
-      name: dsh-bailian-auto-router
+    - id: auto-router-dshgo
+      name: dsh-auto-router-dshgo
       config: {}

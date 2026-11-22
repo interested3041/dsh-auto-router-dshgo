@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-router-dshgo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DeepSeek Harness 移动端(dshgo)多厂商智能路由插件:注册虚拟模型 bailian-auto,单 API key 下由决策模型按任务自动路由到最合适的执行模型;支持百炼/硅基流动/OpenRouter/火山方舟/智谱等单key多模型平台,内置额度感知、冷却回退、负载均衡与失败静默切换。Mobile (dshgo) port of dsh-auto-router: vendor-neutral decision-model router, one API key many models, quota-aware cooldown, load balancing and silent fallback.",
   "type": "module",
   "main": "lib/index.js",
