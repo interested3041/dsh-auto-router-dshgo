@@ -242,7 +242,7 @@ export class RouterStore {
       this.state = sanitize(JSON.parse(await readFile(this.file, 'utf8')))
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-        console.warn(`[dsh-bailian-auto-router] state file unreadable, starting fresh: ${String((error as Error)?.message ?? error)}`)
+        console.warn(`[dsh-auto-router-dshgo] state file unreadable, starting fresh: ${String((error as Error)?.message ?? error)}`)
       }
     }
   }
@@ -501,7 +501,7 @@ export class RouterStore {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code
       if (code !== 'ENOENT') {
-        console.warn(`[dsh-bailian-auto-router] state write failed: ${String((error as Error)?.message ?? error)}`)
+        console.warn(`[dsh-auto-router-dshgo] state write failed: ${String((error as Error)?.message ?? error)}`)
       }
     }
   }

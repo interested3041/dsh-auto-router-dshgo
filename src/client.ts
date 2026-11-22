@@ -1,5 +1,5 @@
 /**
- * Web client half of dsh-bailian-auto-router.
+ * Web client half of dsh-auto-router-dshgo.
  *
  * Compiled to a plain script that registers into the browser module loader:
  * - a configuration + quota-status panel on the Plugin Manager bundle page
@@ -31,7 +31,7 @@
   }
 
   const g = globalThis as any
-  const PACKAGE = 'dsh-bailian-auto-router'
+  const PACKAGE = 'dsh-auto-router-dshgo'
   const NS = 'bailianRouter'
 
   /** Unwrap one RPC result envelope ({ok,value|error} or a plain value). */
@@ -251,7 +251,7 @@
           return h('div', { className: 'bar-root' },
             h('style', null, CSS),
             h('div', { className: 'bar-card' },
-              h('h4', null, T('百炼智能路由', 'Bailian auto router')),
+              h('h4', null, T('智能路由 Auto Router', 'Auto router')),
               h('div', { className: 'bar-error' }, T(
                 'RPC 通道不可用:请确认插件已启用且 DSH 已重启,然后刷新本页。',
                 'RPC unavailable: make sure the plugin is enabled and DSH was restarted, then reload this page.',
@@ -378,7 +378,7 @@
           // ---- overview ----
           h('div', { className: 'bar-card' },
             h('div', { className: 'bar-row' },
-              h('h4', null, T('百炼智能路由 · 状态', 'Bailian auto router · status')),
+              h('h4', null, T('智能路由 Auto Router · 状态', 'Auto router · status')),
               h(Badge, { tone: cfg.apiKeyConfigured ? 'ok' : 'err', text: cfg.apiKeyConfigured ? T('API Key 已配置', 'API key set') : T('API Key 未配置', 'API key missing') }),
               h(Badge, { tone: cfg.enableDecision ? 'ok' : 'warn', text: cfg.enableDecision ? T('决策模型开启', 'decision on') : T('决策模型关闭(启发式)', 'decision off (heuristic)') }),
               h('span', { className: 'bar-muted bar-mono' }, `${state.provider}/${state.model}`),
@@ -567,7 +567,7 @@
                 h('h4', null, T('模型池(按分类展开)', 'Model pool (collapsible by category)')),
                 h('div', {
                   className: 'bar-btn', role: 'button',
-                  onClick: () => void mutate(() => remote.refreshPool(), T('已从百炼拉取模型列表', 'Model list refreshed from Bailian')),
+                  onClick: () => void mutate(() => remote.refreshPool(), T('已拉取模型列表', 'Model list refreshed')),
                 }, T('刷新模型列表', 'Refresh pool')),
                 h('div', {
                   className: 'bar-btn', role: 'button',
@@ -831,7 +831,7 @@
             ),
             (state.history ?? []).length === 0
               ? h('div', { className: 'bar-muted' }, T(
-                '暂无记录;在会话中把模型切到「百炼智能路由」发起对话后回到这里查看。',
+                '暂无记录;在会话中把模型切到「智能路由 Auto Router」发起对话后回到这里查看。',
                 'No records yet; pick the "bailian-auto" model in a session and come back.',
               ))
               : h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '360px', overflow: 'auto' } },
@@ -873,8 +873,8 @@
                   missing = true
                   const detail = mountFailure === null ? '' : `: ${mountFailure}`
                   setLine(T(
-                    `百炼智能路由:远程通道未挂载 · 改用内置配置表单${detail}`,
-                    `Bailian auto router: remote channel not mounted · using the built-in form${detail}`,
+                    `智能路由 Auto Router:远程通道未挂载 · 改用内置配置表单${detail}`,
+                    `Auto router: remote channel not mounted · using the built-in form${detail}`,
                   ))
                 }
                 return
@@ -892,7 +892,7 @@
         return h('div', { className: 'bar-footer-card' },
           h('style', null, CSS),
           h('span', { className: 'bar-dot', style: { background: line ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-idle-primary)' } }),
-          h('span', null, line ?? T('百炼智能路由:状态载入中…', 'Bailian auto router: loading…')))
+          h('span', null, line ?? T('智能路由 Auto Router:状态载入中…', 'Auto router: loading…')))
       }
 
       // ---- plugin entry ----------------------------------------------------------

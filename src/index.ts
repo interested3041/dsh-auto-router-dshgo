@@ -1,5 +1,5 @@
 /**
- * dsh-bailian-auto-router — decision-model router for Aliyun Bailian.
+ * dsh-auto-router-dshgo — decision-model router for Aliyun Bailian.
  *
  * Registers the virtual model `bailian-auto` ("百炼智能路由") with the harness
  * LLM service. Every request to it is first analyzed by the configurable
@@ -29,7 +29,7 @@ export const name = 'bailian-auto-router'
 /** The LLM service is mandatory; everything else is resolved optionally. */
 export const inject = ['llm']
 
-const PACKAGE = 'dsh-bailian-auto-router'
+const PACKAGE = 'dsh-auto-router-dshgo'
 const LOG = `[${PACKAGE}]`
 /** Delay of the first background pool sync after activation. */
 const INITIAL_SYNC_DELAY_MS = 5_000
