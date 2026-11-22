@@ -65,7 +65,7 @@ export const DEFAULT_API_KEY_ENV = API_KEY_REFS[0]!
 export const BUILTIN_CATALOG: readonly CatalogModel[] = [
   // --- DeepSeek family (hosted on Bailian) ---
   { id: 'deepseek-v4.1-flash-1017', name: 'DeepSeek V4.1 Flash', vision: true, contextWindow: 1048576, tags: ['general', 'reasoning', 'code', 'image'] },
-  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash(别名)', vision: false, contextWindow: 131072, tags: ['general', 'reasoning'] },
+  { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash(别名)', vision: true, contextWindow: 1048576, tags: ['general', 'reasoning', 'code', 'image'] },
   { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', vision: false, contextWindow: 1048576, tags: ['code', 'reasoning'] },
   { id: 'vanchin/deepseek-v4-pro', name: 'DeepSeek V4 Pro(vanchin)', vision: false, contextWindow: 1048576, tags: ['code', 'reasoning'] },
   { id: 'deepseek-v4-pro-0813', name: 'DeepSeek V4 Pro 0813', vision: false, contextWindow: 1048576, tags: ['code', 'reasoning'] },

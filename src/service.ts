@@ -37,6 +37,8 @@ export interface PoolModelView {
   id: string
   name: string
   vision: boolean
+  /** True when the vision flag is a declared fact, false when inferred from the id. */
+  visionKnown: boolean
   contextWindow: number | null
   source: 'user' | 'builtin' | 'sync'
   /** Endpoint capability category (`chat` | `image` | `speech` | …). */
@@ -458,6 +460,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
         id: entry.id,
         name: entry.name,
         vision: entry.vision,
+        visionKnown: entry.visionKnown,
         contextWindow: entry.contextWindow ?? null,
         source: entry.source,
         category: entry.category,

@@ -40,6 +40,8 @@ export interface PoolEntryView {
   id: string
   name: string
   vision: boolean
+  /** True when vision came from an explicit catalog/config declaration (not id inference). */
+  visionKnown: boolean
   contextWindow?: number
   source: 'user' | 'builtin' | 'sync'
   /** Inferred capability score (5-100). */
@@ -207,6 +209,7 @@ export class Router {
         id: entry.id,
         name: entry.name,
         vision: entry.traits.vision,
+        visionKnown: entry.traits.visionSource === 'declared',
         ...(entry.contextWindow === undefined ? {} : { contextWindow: entry.contextWindow }),
         source: entry.source,
         quality: entry.traits.quality,

@@ -549,7 +549,8 @@
                 h('td', { className: 'bar-mono', style: { wordBreak: 'break-all' } }, id,
                   meta?.name && meta.name !== id ? h('span', { className: 'bar-muted' }, ` (${meta.name})`) : null),
                 h('td', null, meta?.source ?? '—'),
-                h('td', null, meta?.vision ? '✓' : '—'),
+                h('td', { title: meta ? (meta.vision ? T('明确支持图片输入', 'Declared image input') : (meta.visionKnown ? T('明确不支持图片输入', 'Declared no image input') : T('未核实，仅按模型 id 推断', 'Unverified, inferred from model id'))) : T('目录中无此模型', 'Not in catalog') },
+                  meta ? (meta.vision ? '✓' : (meta.visionKnown ? '✗' : '—')) : '—'),
                 h('td', null, available
                   ? h(Badge, { tone: 'ok', text: T('可用', 'available') })
                   : h(Badge, { tone: 'warn', text: `${T('冷却中', 'cooldown')} ${fmtDuration(q?.cooldownRemainingMs ?? 0)}` })),
@@ -584,7 +585,7 @@
                       h('thead', null, h('tr', null,
                         h('th', null, T('模型', 'Model')),
                         h('th', null, T('来源', 'Source')),
-                        h('th', null, T('视觉', 'Vision')),
+                        h('th', { title: T('✓ 声明支持 / ✗ 声明不支持 / — 未核实(按 id 推断)', '✓ declared / ✗ declared none / — unverified (id inference)') }, T('视觉', 'Vision')),
                         h('th', null, T('冷却', 'Cooldown')),
                         h('th', null, T('连败', 'Fails')),
                         h('th', null, T('调用', 'Calls')),

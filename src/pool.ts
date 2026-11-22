@@ -71,6 +71,7 @@ function traitsOf(
   const traits: ModelTraits = {
     ...inferred,
     ...(explicitVision === undefined ? {} : { vision: explicitVision }),
+    visionSource: explicitVision === undefined ? 'inferred' : 'declared',
     ...(explicitTags === undefined ? {} : { tasks: [...new Set([...inferred.tasks, ...explicitTags])] }),
   }
   // A user-declared id is an explicit instruction to route to it even when the

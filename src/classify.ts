@@ -36,6 +36,8 @@ export interface ModelTraits {
   chat: boolean
   /** Whether it accepts image input. */
   vision: boolean
+  /** Where `vision` came from: explicit catalog/config declaration, or id inference. */
+  visionSource?: 'declared' | 'inferred'
   /** Why a non-chat id is excluded, for the settings panel. */
   excludedReason?: string
   /** Which endpoint surface serves this id. */
