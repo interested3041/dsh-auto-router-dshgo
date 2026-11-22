@@ -3,7 +3,7 @@
 # 选项: -SkipStop 只部署不停止; -NoStart 只停+部署不起; -InstallDir 自定义安装目录
 param(
   [string]$InstallDir = 'D:\Downloads\DSH\plugins\dsh-auto-router',
-  [string]$NextExe = 'D:\SoftWare\DSH\lastest-officially\DSH NEXT.exe',
+  [string]$HostExe = 'D:\SoftWare\DSH\lastest-officially\DSH NEXT.exe',
   [switch]$SkipStop,
   [switch]$NoStart
 )
@@ -11,14 +11,19 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
+# Only this host's processes are touched. Other DSH versions the user runs
+# alongside (low/high) must never be stopped or restarted here.
 if (-not $SkipStop) {
-  Write-Host '==> 停止 DSH 进程 (NEXT / 经典版)'
-  foreach ($name in @('DSH NEXT', 'DeepSeek Harness')) {
-    Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
+  Write-Host "==> 停止本次更新的宿主: $HostExe"
+  $hostProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $HostExe }
+  if (-not $hostProcs) {
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($HostExe)
+    $hostProcs = Get-Process -Name $name -ErrorAction SilentlyContinue
   }
+  $hostProcs | Stop-Process -Force -Confirm:$false
   Start-Sleep -Seconds 3
-  $left = Get-Process -Name 'DSH NEXT', 'DeepSeek Harness' -ErrorAction SilentlyContinue
-  if ($left) { throw 'DSH 进程未能全部退出, 已中止部署' }
+  $left = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $HostExe }
+  if ($left) { throw '本次宿主未能全部退出, 已中止部署' }
 }
 
 Write-Host "==> 部署到 $InstallDir"
@@ -36,9 +41,9 @@ $libCount = (Get-ChildItem -LiteralPath (Join-Path $InstallDir 'lib') -Filter *.
 Write-Host "==> 部署完成: version=$version, lib=$libCount js"
 
 if (-not $NoStart) {
-  Write-Host '==> 启动 DSH NEXT'
-  Start-Process -FilePath $NextExe
+  Write-Host "==> 启动宿主: $HostExe"
+  Start-Process -FilePath $HostExe
   Start-Sleep -Seconds 8
-  $running = (Get-Process -Name 'DSH NEXT' -ErrorAction SilentlyContinue | Measure-Object).Count
-  Write-Host "==> DSH NEXT 进程数: $running"
+  $running = (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $HostExe } | Measure-Object).Count
+  Write-Host "==> 宿主进程数: $running"
 }

@@ -4,7 +4,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Tag,
   [string]$Repo = 'interested3041/dsh-auto-router-dshgo',
   [string]$InstallDir = 'D:\dsh\plugins\dsh-auto-router-dshgo',
-  [string]$NextExe = 'D:\SoftWare\DSH\lastest-officially\DSH NEXT.exe'
+  [string]$HostExe = 'D:\SoftWare\DSH\lastest-officially\DSH NEXT.exe'
 )
 $ErrorActionPreference = 'Stop'
 $ver = $Tag -replace '^v', ''
@@ -24,13 +24,16 @@ $root = Get-ChildItem -Path $tmp -Directory | Where-Object { Test-Path (Join-Pat
 if (-not $root) { throw '解压后未找到 package.json, 更新中止' }
 $src = $root.FullName
 
-Write-Host '==> 停止 DSH 进程 (NEXT / 经典版)'
-foreach ($name in @('DSH NEXT', 'DeepSeek Harness')) {
-  Get-Process -Name $name -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false
+Write-Host "==> 停止本次更新的宿主: $HostExe"
+$hostProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $HostExe }
+if (-not $hostProcs) {
+  $name = [System.IO.Path]::GetFileNameWithoutExtension($HostExe)
+  $hostProcs = Get-Process -Name $name -ErrorAction SilentlyContinue
 }
+$hostProcs | Stop-Process -Force -Confirm:$false
 Start-Sleep -Seconds 3
-$left = Get-Process -Name 'DSH NEXT', 'DeepSeek Harness' -ErrorAction SilentlyContinue
-if ($left) { throw 'DSH 进程未能全部退出, 已中止更新' }
+$left = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $HostExe }
+if ($left) { throw '本次宿主未能全部退出, 已中止更新' }
 
 Write-Host "==> 部署 v$ver 到 $InstallDir"
 foreach ($dir in @('lib', 'docs', 'locale', 'src', 'test', 'scripts')) {
@@ -48,9 +51,9 @@ foreach ($file in @('package.json', 'CHANGELOG.md', 'README.md')) {
 $version = (Get-Content -LiteralPath (Join-Path $InstallDir 'package.json') -Raw | ConvertFrom-Json).version
 Write-Host "==> 部署完成: version=$version"
 
-Write-Host '==> 启动 DSH NEXT'
-Start-Process -FilePath $NextExe
+Write-Host "==> 启动宿主: $HostExe"
+Start-Process -FilePath $HostExe
 Start-Sleep -Seconds 8
-$running = (Get-Process -Name 'DSH NEXT' -ErrorAction SilentlyContinue | Measure-Object).Count
-Write-Host "==> DSH NEXT 进程数: $running"
+$running = (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $HostExe } | Measure-Object).Count
+Write-Host "==> 宿主进程数: $running"
 Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
