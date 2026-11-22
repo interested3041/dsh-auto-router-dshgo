@@ -11,6 +11,8 @@ import { TASK_TYPES } from './catalog.js'
 import { thinkingDispatch } from './classify.js'
 import type { ConfigModel, SavedAccount } from './config.js'
 import { invalidateConnectionCache, listConnections } from './connection.js'
+import { accountKeyId, connectionLabel, dedupeConnections, resolveKeyId } from './identity.js'
+import { priceOf } from './strategy.js'
 import type { HostContext } from './context.js'
 import { BailianClient } from './http.js'
 import { apiKeyConfigured, resolveApiKey } from './router.js'
@@ -30,6 +32,12 @@ export interface AccountView {
   apiKeyEnv: string | null
   /** Whether this is the active account. */
   active: boolean
+  /** Profile provider this account maps to, when any. */
+  providerId: string | null
+  /** Saved vendor tag; null = auto-detect. */
+  vendor: string | null
+  /** Local ledger identity for this account's key. */
+  keyId: string
 }
 
 /** One pool model as the panel displays it. */
@@ -48,6 +56,14 @@ export interface PoolModelView {
   /** Inferred quality (5–100) and speed (5–100, higher = cheaper). */
   quality: number
   speed: number
+  /** Configured per-model cap, null = unlimited. */
+  quota: { maxCalls?: number; maxTokens?: number } | null
+  /** Local bucket usage for the active key (free-quota strategy). */
+  bucketTokens: number
+  /** Local lifetime tokens for the active key. */
+  ledgerTokens: number
+  /** Estimated price tier (lower = cheaper), for price-first ordering. */
+  price: number
 }
 
 /** One model's local quota status. */
@@ -75,6 +91,14 @@ export interface HistoryView {
   finalModel: string | null
   ok: boolean
   decisionTokens: number
+  /** auto = plugin decided; user = user pinned the model. */
+  origin: 'auto' | 'user'
+  /** Ordering strategy in force for this decision. */
+  strategy: string
+  /** Local ledger identity used. */
+  keyId: string | null
+  /** Answer tokens consumed by the final model. */
+  tokens: number
 }
 
 /** Editable configuration fields (plain values). */
@@ -117,6 +141,12 @@ export interface ConfigView {
   activeAccountId: string
   /** Per-model usage limits (`maxCalls` / `maxTokens`), empty = no limit. */
   modelLimits: Record<string, { maxCalls?: number; maxTokens?: number }>
+  /** Candidate ordering strategy. */
+  sortStrategy: 'auto' | 'price' | 'capability' | 'speed' | 'free_quota'
+  /** Free-quota bucket size in tokens. */
+  bucketTokens: number
+  /** Free-quota completion tolerance (0–0.5). */
+  bucketTolerance: number
 }
 
 /** Complete state snapshot returned by every RPC method. */
@@ -150,6 +180,12 @@ export interface RouterStateView {
   derived: { decisionModel: boolean; fallbackModel: boolean } | null
   /** Per-model lifetime usage (calls + tokens), shown beside each limit. */
   modelUsage: Record<string, { calls: number; tokens: number }>
+  /** Deduped, self-filtered profile connections for the account dropdown. */
+  connections: { id: string; name: string; providerId: string; baseURL: string; credentialRef: string | null }[]
+  /** Local ledger summary for the active key. */
+  keyLedger: { keyId: string; label: string; totalTokens: number; cycle: number }
+  /** Same-endpoint older key whose ledger could be inherited, when current is empty. */
+  inheritSuggestion: { fromKeyId: string; label: string; totalTokens: number } | null
 }
 
 /** Result of the pool-sync operation. */
@@ -210,6 +246,9 @@ export interface ConfigPatch {
   activeAccountId?: string
   /** Per-model usage limits; an empty object clears every limit. */
   modelLimits?: Record<string, { maxCalls?: number; maxTokens?: number }>
+  sortStrategy?: 'auto' | 'price' | 'capability' | 'speed' | 'free_quota'
+  bucketTokens?: number
+  bucketTolerance?: number
 }
 
 /** Sanitize one incoming patch; throws on unusable values. */
@@ -254,6 +293,25 @@ function sanitizePatch(patch: unknown): Record<string, unknown> {
       throw new Error(`vendor must be one of ${allowed.join(', ')}`)
     }
     out.vendor = input.vendor
+  }
+  if (input.sortStrategy !== undefined) {
+    const allowed = ['auto', 'price', 'capability', 'speed', 'free_quota'] as const
+    if (!(allowed as readonly unknown[]).includes(input.sortStrategy)) {
+      throw new Error(`sortStrategy must be one of ${allowed.join(', ')}`)
+    }
+    out.sortStrategy = input.sortStrategy
+  }
+  if (input.bucketTokens !== undefined) {
+    if (typeof input.bucketTokens !== 'number' || !Number.isFinite(input.bucketTokens) || input.bucketTokens < 1000) {
+      throw new Error('bucketTokens must be a number >= 1000')
+    }
+    out.bucketTokens = Math.round(input.bucketTokens)
+  }
+  if (input.bucketTolerance !== undefined) {
+    if (typeof input.bucketTolerance !== 'number' || !Number.isFinite(input.bucketTolerance) || input.bucketTolerance < 0 || input.bucketTolerance > 0.5) {
+      throw new Error('bucketTolerance must be between 0 and 0.5')
+    }
+    out.bucketTolerance = input.bucketTolerance
   }
   if (input.modelLimits !== undefined) {
     const limits = input.modelLimits
@@ -396,6 +454,10 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     finalModel: record.finalModel ?? null,
     ok: record.ok,
     decisionTokens: record.decisionTokens ?? 0,
+    origin: record.origin ?? 'auto',
+    strategy: record.strategy ?? 'auto',
+    keyId: record.keyId ?? null,
+    tokens: record.tokens ?? 0,
   }))
   const taskRoutes: Record<string, string[]> = {}
   for (const task of TASK_TYPES) taskRoutes[task] = [...(options.taskRoutes[task] ?? [])]
@@ -407,6 +469,9 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     current: candidate.baseURL === options.baseURL,
   }))
   // Masked account views: the raw key never leaves the host process.
+  const activeKeyId = resolveKeyId({ activeAccountId: options.activeAccountId, baseURL: options.baseURL, apiKeyEnv: options.apiKeyEnv })
+  const activeLedger = store.ledgerOf(activeKeyId, { baseURL: options.baseURL })
+  const inheritFrom = activeLedger.totalTokens === 0 ? (store.sameEndpointLedger(activeKeyId, options.baseURL) ?? null) : null
   const accounts: AccountView[] = options.accounts.map(account => ({
     id: account.id,
     name: account.name,
@@ -415,6 +480,9 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     keyHint: typeof account.apiKey === 'string' && account.apiKey.length > 0 ? `••••${account.apiKey.slice(-4)}` : null,
     apiKeyEnv: account.apiKeyEnv ?? null,
     active: account.id === options.activeAccountId,
+    providerId: account.providerId ?? null,
+    vendor: account.vendor ?? null,
+    keyId: accountKeyId(account.id),
   }))
   return {
     provider: 'bailian-auto',
@@ -454,6 +522,9 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
       accounts,
       activeAccountId: options.activeAccountId,
       modelLimits: { ...options.modelLimits },
+      sortStrategy: options.sortStrategy,
+      bucketTokens: options.bucketTokens,
+      bucketTolerance: options.bucketTolerance,
     },
     pool: {
       models: snapshot.entries.map(entry => ({
@@ -467,6 +538,10 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
         tasks: entry.tasks.slice(),
         quality: entry.quality,
         speed: entry.speed,
+        quota: options.modelLimits[entry.id] ?? null,
+        bucketTokens: activeLedger.models[entry.id]?.bucketTokens ?? 0,
+        ledgerTokens: activeLedger.models[entry.id]?.tokens ?? 0,
+        price: priceOf(entry.id),
       })),
       count: snapshot.entries.length,
       total: snapshot.pool.total,
@@ -496,6 +571,19 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     },
     candidates,
     derived: snapshot.derived ?? null,
+    connections: dedupeConnections(candidates.map(candidate => ({
+      id: candidate.entryId,
+      name: candidate.providerId ?? '',
+      providerId: candidate.providerId ?? '',
+      baseURL: candidate.baseURL,
+      credentialRef: candidate.apiKeyEnv ?? undefined,
+      kind: 'discovered' as const,
+    }))).map(connection => ({
+      id: connection.id, name: connectionLabel(connection), providerId: connection.providerId ?? '',
+      baseURL: connection.baseURL, credentialRef: connection.credentialRef ?? null,
+    })),
+    keyLedger: { keyId: activeKeyId, label: activeLedger.label, totalTokens: activeLedger.totalTokens, cycle: activeLedger.cycle },
+    inheritSuggestion: inheritFrom == null ? null : { fromKeyId: inheritFrom.keyId, label: inheritFrom.label, totalTokens: inheritFrom.totalTokens },
   }
 }
 
@@ -516,6 +604,10 @@ export interface BailianRouterService {
   /** Activate a saved account (or '' for the default endpoint / auto-adopt). */
   activateAccount(id: string): Promise<RefreshResult>
   refreshPool(): Promise<RefreshResult>
+  /** One-shot override: next request uses this model, then auto-routing resumes. */
+  pinUserModel(model: string): Promise<RouterStateView>
+  /** Merge an older same-endpoint key's ledger into the active key. */
+  inheritKeyLedger(fromKeyId: string, toKeyId: string): Promise<RouterStateView>
   resetQuota(model?: string): Promise<RouterStateView>
   clearHistory(): Promise<RouterStateView>
 }
@@ -709,6 +801,20 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
     async clearHistory() {
       await store.ready
       store.clearHistory()
+      return stateView(ctx, router, store)
+    },
+    async pinUserModel(model: string) {
+      await store.ready
+      if (typeof model !== 'string' || model.trim().length === 0) throw new Error('model must be a non-empty string')
+      store.state.pendingUserModel = model.trim()
+      store.scheduleWrite()
+      return stateView(ctx, router, store)
+    },
+    async inheritKeyLedger(fromKeyId: string, toKeyId: string) {
+      await store.ready
+      if (typeof fromKeyId !== 'string' || typeof toKeyId !== 'string') throw new Error('key ids must be strings')
+      const ok = store.inheritLedger(fromKeyId, toKeyId)
+      if (!ok) throw new Error('source ledger not found')
       return stateView(ctx, router, store)
     },
   }

@@ -49,6 +49,39 @@ export interface RouteRecord {
   ok: boolean
   /** Tokens spent on the decision call for this request. */
   decisionTokens?: number
+  /** 'auto' = router chose; 'user' = the user pinned the model in-message. */
+  origin?: 'auto' | 'user'
+  /** Candidate-ordering strategy in effect for this request. */
+  strategy?: string
+  /** Local key identity the tokens were charged to. */
+  keyId?: string
+  /** Execution tokens (input+output) charged for this request. */
+  tokens?: number
+}
+
+/** Per-model consumption inside one key's ledger. */
+export interface KeyLedgerModel {
+  tokens: number
+  calls: number
+  /** Tokens consumed in the current free-quota bucket. */
+  bucketTokens: number
+  bucketStartedAt: number
+  lastUsedAt: number
+}
+
+/** One API key's independent token ledger (never mixed across keys). */
+export interface KeyLedger {
+  keyId: string
+  label: string
+  providerId?: string
+  baseURL: string
+  updatedAt: number
+  models: Record<string, KeyLedgerModel>
+  totalTokens: number
+  /** Bucket rotation counter (free-quota mode). */
+  cycle: number
+  /** Set when this ledger was cloned from another key on the same endpoint. */
+  inheritedFrom?: string
 }
 
 /** Recent consumption of one model inside one task category. */
@@ -76,7 +109,7 @@ export interface SessionBinding {
 
 /** Complete persisted state. */
 export interface RouterState {
-  version: 1
+  version: 2
   /** Endpoint + credential identity the pool and quota belong to. */
   scope?: string
   pool: PoolModel[]
@@ -96,9 +129,15 @@ export interface RouterState {
   sessions: Record<string, SessionBinding>
   /** Per-model cumulative usage (calls + tokens), used for configured limits. */
   modelTotals: Record<string, { calls: number; tokens: number }>
+  /** Per-key independent token ledgers (free-quota bucket accounting). */
+  ledgers: Record<string, KeyLedger>
+  /** Most-recently-used key ids, newest first. */
+  keyHistory: string[]
+  /** One-shot model override for the next request (user pinned). */
+  pendingUserModel?: string
 }
 
-const STATE_VERSION = 1 as const
+const STATE_VERSION = 2 as const
 const MAX_HISTORY = 50
 /** Session stickiness expires so a reused id cannot pin an obsolete model. */
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000
@@ -125,6 +164,8 @@ function freshState(): RouterState {
     effortUnsupported: {},
     sessions: {},
     modelTotals: {},
+    ledgers: {},
+    keyHistory: [],
   }
 }
 
@@ -208,6 +249,41 @@ function sanitize(raw: unknown): RouterState {
       }
     }
   }
+  if (typeof data.ledgers === 'object' && data.ledgers !== null) {
+    for (const [keyId, ledger] of Object.entries(data.ledgers)) {
+      if (typeof ledger !== 'object' || ledger === null) continue
+      const models: Record<string, KeyLedgerModel> = {}
+      if (typeof ledger.models === 'object' && ledger.models !== null) {
+        for (const [model, entry] of Object.entries(ledger.models)) {
+          if (typeof entry !== 'object' || entry === null) continue
+          models[model] = {
+            tokens: Number.isFinite(entry.tokens) ? entry.tokens : 0,
+            calls: Number.isFinite(entry.calls) ? entry.calls : 0,
+            bucketTokens: Number.isFinite(entry.bucketTokens) ? entry.bucketTokens : 0,
+            bucketStartedAt: Number.isFinite(entry.bucketStartedAt) ? entry.bucketStartedAt : 0,
+            lastUsedAt: Number.isFinite(entry.lastUsedAt) ? entry.lastUsedAt : 0,
+          }
+        }
+      }
+      state.ledgers[keyId] = {
+        keyId,
+        label: typeof ledger.label === 'string' ? ledger.label : keyId,
+        ...(typeof ledger.providerId === 'string' ? { providerId: ledger.providerId } : {}),
+        baseURL: typeof ledger.baseURL === 'string' ? ledger.baseURL : '',
+        updatedAt: Number.isFinite(ledger.updatedAt) ? ledger.updatedAt : 0,
+        models,
+        totalTokens: Number.isFinite(ledger.totalTokens) ? ledger.totalTokens : 0,
+        cycle: Number.isFinite(ledger.cycle) ? ledger.cycle : 0,
+        ...(typeof ledger.inheritedFrom === 'string' ? { inheritedFrom: ledger.inheritedFrom } : {}),
+      }
+    }
+  }
+  if (Array.isArray(data.keyHistory)) {
+    state.keyHistory = data.keyHistory.filter((id): id is string => typeof id === 'string').slice(0, 50)
+  }
+  if (typeof data.pendingUserModel === 'string' && data.pendingUserModel.length > 0) {
+    state.pendingUserModel = data.pendingUserModel
+  }
   return state
 }
 
@@ -239,7 +315,13 @@ export class RouterStore {
 
   private async load(): Promise<void> {
     try {
-      this.state = sanitize(JSON.parse(await readFile(this.file, 'utf8')))
+      const text = await readFile(this.file, 'utf8')
+      const raw = JSON.parse(text) as Record<string, unknown>
+      // v1 -> v2: keep a one-time backup before the additive ledger fields land.
+      if (raw && typeof raw === 'object' && !('ledgers' in raw)) {
+        try { await writeFile(`${this.file}.v1.bak`, text, 'utf8') } catch (_backupFailed) { /* best effort */ }
+      }
+      this.state = sanitize(raw)
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
         console.warn(`[dsh-auto-router-dshgo] state file unreadable, starting fresh: ${String((error as Error)?.message ?? error)}`)
@@ -442,6 +524,97 @@ export class RouterStore {
     this.scheduleWrite()
   }
 
+  /** Ledger of one key, created on demand (empty = brand-new key). */
+  ledgerOf(keyId: string, meta?: { label?: string; providerId?: string; baseURL?: string }): KeyLedger {
+    const existing = this.state.ledgers[keyId]
+    if (existing !== undefined) return existing
+    const ledger: KeyLedger = {
+      keyId,
+      label: meta?.label ?? keyId,
+      ...(meta?.providerId === undefined ? {} : { providerId: meta.providerId }),
+      baseURL: meta?.baseURL ?? '',
+      updatedAt: Date.now(),
+      models: {},
+      totalTokens: 0,
+      cycle: 0,
+    }
+    this.state.ledgers[keyId] = ledger
+    this.touchKey(keyId)
+    this.scheduleWrite()
+    return ledger
+  }
+
+  /** Whether a ledger already exists for this key (used for inherit prompts). */
+  hasLedger(keyId: string): boolean {
+    return this.state.ledgers[keyId] !== undefined
+  }
+
+  /** Most recent ledger sharing the same endpoint but a different key. */
+  sameEndpointLedger(keyId: string, baseURL: string): KeyLedger | undefined {
+    const normalized = baseURL.replace(/\/+$/, '')
+    const candidates = this.state.keyHistory
+      .map(id => this.state.ledgers[id])
+      .filter((ledger): ledger is KeyLedger => ledger !== undefined && ledger.keyId !== keyId)
+      .filter(ledger => ledger.baseURL.replace(/\/+$/, '') === normalized)
+    return candidates[0]
+  }
+
+  /** Clone another key's ledger onto this key (user approved same-URL reuse). */
+  inheritLedger(fromKeyId: string, toKeyId: string, meta?: { label?: string; providerId?: string; baseURL?: string }): KeyLedger {
+    const source = this.state.ledgers[fromKeyId]
+    if (source === undefined) throw new Error('source ledger not found')
+    const target = this.ledgerOf(toKeyId, meta)
+    target.models = JSON.parse(JSON.stringify(source.models)) as Record<string, KeyLedgerModel>
+    target.totalTokens = source.totalTokens
+    target.cycle = source.cycle
+    target.inheritedFrom = fromKeyId
+    target.updatedAt = Date.now()
+    this.touchKey(toKeyId)
+    this.scheduleWrite()
+    return target
+  }
+
+  /** Charge execution tokens to one key's ledger and its current bucket. */
+  recordLedgerTokens(keyId: string, model: string, tokens: number, now = Date.now()): void {
+    const ledger = this.ledgerOf(keyId)
+    const entry = ledger.models[model] ??= { tokens: 0, calls: 0, bucketTokens: 0, bucketStartedAt: now, lastUsedAt: 0 }
+    const amount = Math.max(0, Math.round(tokens))
+    entry.tokens += amount
+    entry.calls += 1
+    entry.bucketTokens += amount
+    entry.lastUsedAt = now
+    ledger.totalTokens += amount
+    ledger.updatedAt = now
+    this.touchKey(keyId)
+    this.scheduleWrite()
+  }
+
+  /** Reset one model's bucket, or every bucket of a key (new rotation cycle). */
+  resetBucket(keyId: string, model?: string): void {
+    const ledger = this.state.ledgers[keyId]
+    if (ledger === undefined) return
+    if (model === undefined) {
+      for (const entry of Object.values(ledger.models)) {
+        entry.bucketTokens = 0
+        entry.bucketStartedAt = Date.now()
+      }
+      ledger.cycle += 1
+    } else {
+      const entry = ledger.models[model]
+      if (entry !== undefined) {
+        entry.bucketTokens = 0
+        entry.bucketStartedAt = Date.now()
+      }
+    }
+    ledger.updatedAt = Date.now()
+    this.scheduleWrite()
+  }
+
+  /** Move a key to the front of the recency list. */
+  private touchKey(keyId: string): void {
+    this.state.keyHistory = [keyId, ...this.state.keyHistory.filter(id => id !== keyId)].slice(0, 50)
+  }
+
   /** Remember that a model rejected image input. */
   vetoVision(model: string, now = Date.now()): void {
     this.state.visionVeto[model] = now
@@ -517,3 +690,4 @@ export class RouterStore {
     await this.flush()
   }
 }
+

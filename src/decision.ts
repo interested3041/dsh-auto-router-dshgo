@@ -14,6 +14,8 @@
  */
 import type { GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
 import { inferVision, PROVIDER } from './catalog.js'
+import { orderCandidates } from './strategy.js'
+import { resolveKeyId } from './identity.js'
 import type { TaskType } from './catalog.js'
 import type { RouterOptions } from './config.js'
 import type { BailianClient } from './http.js'
@@ -229,7 +231,25 @@ export function buildCandidates(
   const preferred = balanced.chosen !== undefined && ordered.includes(balanced.chosen)
     ? [balanced.chosen, ...ordered.filter(id => id !== balanced.chosen)]
     : ordered
-  return { ranked: preferred, forDecision: preferred.slice(0, window) }
+  // Explicit ordering strategies override the legacy task-weighted rotation.
+  // `auto` keeps the historical behaviour untouched.
+  let final = preferred
+  if (options.sortStrategy !== 'auto') {
+    const keyId = resolveKeyId({ activeAccountId: options.activeAccountId, baseURL: options.baseURL, apiKeyEnv: options.apiKeyEnv })
+    const ledger = store.ledgerOf(keyId, { baseURL: options.baseURL })
+    const cands = final.map(id => {
+      const traits = pool.byId.get(id)?.traits
+      return { id, quality: traits?.quality ?? 50, speed: traits?.speed ?? 50 }
+    })
+    const orderOpts = { bucketTokens: options.bucketTokens, bucketTolerance: options.bucketTolerance }
+    let result = orderCandidates(cands, options.sortStrategy, ledger, orderOpts)
+    if (result.allFull) {
+      store.resetBucket(keyId)
+      result = orderCandidates(cands, options.sortStrategy, store.ledgerOf(keyId), orderOpts)
+    }
+    final = result.order
+  }
+  return { ranked: final, forDecision: final.slice(0, window) }
 }
 
 /** One decision-prompt build result. */

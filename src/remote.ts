@@ -41,6 +41,8 @@ const REMOTE_METHODS = [
   'resetModelTotals',
   'selfCheck',
   'clearHistory',
+  'pinUserModel',
+  'inheritKeyLedger',
 ] as const
 
 /**
@@ -66,6 +68,8 @@ function remoteClass(impl: BailianRouterService) {
     resetModelTotals(model?: string) { return impl.resetModelTotals(model) }
     selfCheck() { return impl.selfCheck() }
     clearHistory() { return impl.clearHistory() }
+    pinUserModel(model: string) { return impl.pinUserModel(model) }
+    inheritKeyLedger(fromKeyId: string, toKeyId: string) { return impl.inheritKeyLedger(fromKeyId, toKeyId) }
   }
 }
 

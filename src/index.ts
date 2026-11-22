@@ -1,5 +1,5 @@
 /**
- * dsh-auto-router-dshgo — decision-model router for Aliyun Bailian.
+ * dsh-auto-router — decision-model router for Aliyun Bailian.
  *
  * Registers the virtual model `bailian-auto` ("百炼智能路由") with the harness
  * LLM service. Every request to it is first analyzed by the configurable
@@ -93,3 +93,4 @@ export function apply(ctx: HostContext, config: Config): void {
   }
   ctx.logger.info(`${LOG} registered virtual model "${PROVIDER}" (智能路由 Auto Router)`)
 }
+

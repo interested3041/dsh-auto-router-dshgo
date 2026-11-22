@@ -40,7 +40,8 @@ assert(typeof host.apply === 'function', 'apply is a function')
 assert(host.name === 'bailian-auto-router', 'name is bailian-auto-router')
 assert(Array.isArray(host.inject) && host.inject.includes('llm'), 'inject includes llm')
 assert(host.Config !== undefined, 'Config schema exported')
-assert(Array.isArray(host.REMOTE_ENDPOINTS) && host.REMOTE_ENDPOINTS.length === 11, 'REMOTE_ENDPOINTS lists the 11 endpoints')
+assert(Array.isArray(host.REMOTE_ENDPOINTS) && host.REMOTE_ENDPOINTS.length === 13, 'REMOTE_ENDPOINTS lists the 13 endpoints')
+assert(host.REMOTE_ENDPOINTS.some(e => e.endsWith('/pinUserModel')) && host.REMOTE_ENDPOINTS.some(e => e.endsWith('/inheritKeyLedger')), '0.6 adds pinUserModel + inheritKeyLedger endpoints')
 assert(!('TYPERT' in host), 'no generated Typert artifact is exported (source markers are used)')
 
 // 3. Pure routing helpers behave.
@@ -100,6 +101,7 @@ const expectedWires = {
   switchConnection: ['entryId', 'providerId'], upsertAccount: ['account'],
   removeAccount: ['id'], activateAccount: ['id'], resetQuota: ['model'],
   resetModelTotals: ['model'], selfCheck: [], clearHistory: [],
+  pinUserModel: ['model'], inheritKeyLedger: ['fromKeyId', 'toKeyId'],
 }
 let wiresOk = true
 for (const [method, wires] of Object.entries(expectedWires)) {
@@ -115,7 +117,7 @@ const clientEndpoints = [...clientSource.matchAll(/endpoint\('([A-Za-z]+)'\)/g)]
 assert(JSON.stringify(clientEndpoints) === JSON.stringify(Object.keys(expectedWires).sort()), 'client declares exactly the marked endpoints')
 assert(/namespace:\s*NS/.test(clientSource) && /service:\s*NS/.test(clientSource), 'client descriptors carry namespace and service')
 const clientWires = [...clientSource.matchAll(/param\('([A-Za-z]+)'/g)].map(match => match[1]).sort()
-assert(JSON.stringify(clientWires) === JSON.stringify(['account', 'entryId', 'id', 'id', 'model', 'model', 'patch', 'providerId'].sort()), 'client wire names match the Host parameter names')
+assert(JSON.stringify(clientWires) === JSON.stringify(['account', 'entryId', 'fromKeyId', 'id', 'id', 'model', 'model', 'model', 'patch', 'providerId', 'toKeyId'].sort()), 'client wire names match the Host parameter names')
 
 // Report.
 let failed = 0

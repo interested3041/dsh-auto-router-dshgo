@@ -1,5 +1,5 @@
 /**
- * Web client half of dsh-auto-router-dshgo.
+ * Web client half of dsh-auto-router.
  *
  * Compiled to a plain script that registers into the browser module loader:
  * - a configuration + quota-status panel on the Plugin Manager bundle page
@@ -24,6 +24,8 @@
     resetModelTotals(model?: string): Promise<any>
     selfCheck(): Promise<any>
     clearHistory(): Promise<any>
+    pinUserModel(model: string): Promise<any>
+    inheritKeyLedger(fromKeyId: string, toKeyId: string): Promise<any>
     switchConnection(entryId: string, providerId: string): Promise<any>
     upsertAccount(account: Record<string, unknown>): Promise<any>
     removeAccount(id: string): Promise<any>
@@ -94,6 +96,8 @@
           { ...endpoint('resetQuota'), parameters: [param('model', 'ModelId', anyValue, true)], result: codec('RouterState', asObject) },
           { ...endpoint('resetModelTotals'), parameters: [param('model', 'ModelId', anyValue, true)], result: codec('RouterState', asObject) },
           { ...endpoint('clearHistory'), parameters: [], result: codec('RouterState', asObject) },
+          { ...endpoint('pinUserModel'), parameters: [param('model', 'ModelId', anyValue)], result: codec('RouterState', asObject) },
+          { ...endpoint('inheritKeyLedger'), parameters: [param('fromKeyId', 'String', anyValue), param('toKeyId', 'String', anyValue)], result: codec('RouterState', asObject) },
           { ...endpoint('selfCheck'), parameters: [], result: codec('SelfCheckResult', asObject) },
           {
             ...endpoint('switchConnection'),
@@ -183,6 +187,8 @@
         const [notice, setNotice] = useState<string | null>(null)
         const [selfCheck, setSelfCheck] = useState<any>(null)
         const [acctForm, setAcctForm] = useState<any>({ id: '', name: '', baseURL: '', apiKey: '', apiKeyEnv: '' })
+        const [tab, setTab] = useState<'account' | 'route' | 'pool' | 'log'>('account')
+        const show = (name: string) => tab === name
         const alive = useRef(true)
         useEffect(() => () => { alive.current = false }, [])
 
@@ -204,6 +210,9 @@
             includeSpecialEndpoints: next.config?.includeSpecialEndpoints === true,
             excludeModelsText: (next.config?.excludeModels ?? []).join('\n'),
             balanceStrategy: next.config?.balanceStrategy ?? 'balanced',
+            sortStrategy: next.config?.sortStrategy ?? 'auto',
+            bucketTokens: String(next.config?.bucketTokens ?? 1000000),
+            bucketTolerance: String(next.config?.bucketTolerance ?? 0.05),
             balanceWindow: String(next.config?.balanceWindow ?? 6),
             balanceBand: String(next.config?.balanceBand ?? 0),
             thinkingEffort: next.config?.thinkingEffort ?? 'auto',
@@ -268,8 +277,11 @@
         const cfg = state.config
         const saveConfig = () => {
           const taskRoutes: Record<string, string[]> = {}
+          const priceSorted = [...(state.pool?.models ?? [])].sort((a: any, b: any) => (a.price ?? 5) - (b.price ?? 5)).map((m: any) => m.id)
           for (const [task, text] of Object.entries(draft.taskRoutesText ?? {})) {
-            taskRoutes[task] = String(text).split(/[\n,，]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+            const list = String(text).split(/[\n,，]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+            // 0.6: an emptied candidate list means "price first", not "no candidates".
+            taskRoutes[task] = list.length > 0 ? list : priceSorted
           }
           let models: unknown
           try {
@@ -299,6 +311,9 @@
             rateLimitCooldownSeconds: Number(draft.rateLimitCooldownSeconds),
             maxCandidatesForDecision: Number(draft.maxCandidatesForDecision ?? cfg.maxCandidatesForDecision ?? 14),
             balanceStrategy: draft.balanceStrategy ?? cfg.balanceStrategy ?? 'balanced',
+            sortStrategy: draft.sortStrategy ?? cfg.sortStrategy ?? 'auto',
+            bucketTokens: Number(draft.bucketTokens ?? cfg.bucketTokens ?? 1000000),
+            bucketTolerance: Number(draft.bucketTolerance ?? cfg.bucketTolerance ?? 0.05),
             balanceWindow: Number(draft.balanceWindow ?? cfg.balanceWindow ?? 6),
             balanceBand: Number(draft.balanceBand ?? cfg.balanceBand ?? 0),
             thinkingEffort: draft.thinkingEffort ?? cfg.thinkingEffort ?? 'auto',
@@ -357,6 +372,17 @@
           }
         }
         const resetAcctForm = () => setAcctForm({ id: '', name: '', baseURL: '', apiKey: '', apiKeyEnv: '' })
+        /** 0.6 inline per-model cap editor: writes modelLimits immediately. */
+        const setLimit = (id: string, key: 'maxCalls' | 'maxTokens', raw: string) => {
+          const current = { ...(state.config?.modelLimits ?? {}) }
+          const entry = { ...(current[id] ?? {}) }
+          const num = Number(raw)
+          if (raw.trim() === '' || !Number.isFinite(num) || num < 1) delete entry[key]
+          else entry[key] = Math.round(num)
+          if (entry.maxCalls === undefined && entry.maxTokens === undefined) delete current[id]
+          else current[id] = entry
+          void mutate(() => remote.updateConfig({ modelLimits: current }), T('额度上限已更新', 'Limit updated'))
+        }
         const saveAccount = () => {
           const name = String(acctForm.name ?? '').trim()
           const baseURL = String(acctForm.baseURL ?? '').trim()
@@ -375,8 +401,16 @@
         return h('div', { className: 'bar-root' },
           h('style', null, CSS),
 
+          // ---- tab bar (0.6 paged UI) ----
+          h('div', { className: 'bar-row', style: { gap: '6px' } },
+            ...([['account', T('账号与连接', 'Accounts')], ['route', T('路由与策略', 'Routing')], ['pool', T('模型池与限额', 'Pool & limits')], ['log', T('日志与自检', 'Logs & check')]] as [string, string][]).map(([key, label]) =>
+              h('div', {
+                key, className: tab === key ? 'bar-btn bar-btn-primary' : 'bar-btn', role: 'button',
+                onClick: () => setTab(key as any),
+              }, label))),
+
           // ---- overview ----
-          h('div', { className: 'bar-card' },
+          show('account') && h('div', { className: 'bar-card' },
             h('div', { className: 'bar-row' },
               h('h4', null, T('智能路由 Auto Router · 状态', 'Auto router · status')),
               h(Badge, { tone: cfg.apiKeyConfigured ? 'ok' : 'err', text: cfg.apiKeyConfigured ? T('API Key 已配置', 'API key set') : T('API Key 未配置', 'API key missing') }),
@@ -393,12 +427,19 @@
               },
                 h('option', { value: '' }, T('默认接口 / 自动沿用', 'Default endpoint / auto-adopt')),
                 ...accounts.map((a: any) => h('option', { key: a.id, value: `acct:${a.id}` }, a.name)),
-                ...(state.candidates ?? []).map((c: any) => h('option', {
-                  key: `${c.entryId}|${c.providerId}`,
-                  value: `conn:${c.entryId}|${c.providerId}`,
-                }, T('profile 连接: ', 'Profile: ') + `${c.entryId} → ${c.providerId}`)),
+                ...(state.connections ?? []).map((c: any) => h('option', {
+                  key: `${c.id}|${c.providerId}`,
+                  value: `conn:${c.id}|${c.providerId}`,
+                }, T('profile 连接: ', 'Profile: ') + `${c.name} → ${c.providerId}`)),
               ),
               h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('切换后自动重新同步模型池并重置冷却', 'Switching resyncs the pool and resets cooldowns')),
+            ),
+            h('div', { className: 'bar-row bar-muted', style: { fontSize: '11px' } },
+              h('span', null, T('本地台账: ', 'Local ledger: '), h('span', { className: 'bar-mono' }, `${state.keyLedger?.totalTokens ?? 0} tok · 周期 ${state.keyLedger?.cycle ?? 0}`)),
+              state.inheritSuggestion ? h('div', {
+                className: 'bar-btn', role: 'button',
+                onClick: () => void mutate(() => remote.inheritKeyLedger(state.inheritSuggestion.fromKeyId, state.keyLedger.keyId), T('已继承同接口旧 key 的台账', 'Inherited same-endpoint ledger')),
+              }, T(`继承旧 key 台账(${state.inheritSuggestion.totalTokens} tok)`, `Inherit old key ledger (${state.inheritSuggestion.totalTokens} tok)`)) : null,
             ),
             h('div', { className: 'bar-row bar-muted' },
               h('span', null, T('接口: ', 'Endpoint: '), h('span', { className: 'bar-mono' }, cfg.baseURL)),
@@ -433,7 +474,7 @@
           ),
 
           // ---- API account management ----
-          h('div', { className: 'bar-card' },
+          show('account') && h('div', { className: 'bar-card' },
             h('h4', null, T('API 账号管理(添加 / 切换多厂商账号)', 'API accounts (add / switch multi-vendor accounts)')),
             h('div', { className: 'bar-muted', style: { fontSize: '11px' } }, T(
               'Key 以 secret 形式存于本机配置,面板打码显示,绝不写入 state.json 或日志;也可只填凭据引用(环境变量名)。',
@@ -477,7 +518,7 @@
           ),
 
           // ---- routing configuration ----
-          h('div', { className: 'bar-card' },
+          show('route') && h('div', { className: 'bar-card' },
             h('h4', null, T('路由与容灾配置', 'Routing & failover')),
             h('div', { className: 'bar-row' },
               h('label', { className: 'bar-check' },
@@ -485,10 +526,28 @@
                 T('启用决策模型(关闭后仅按启发式规则路由)', 'Enable decision model (heuristics only when off)')),
             ),
             h('div', { className: 'bar-row' },
-              field(T('决策模型', 'Decision model'), draft.decisionModel, (v: string) => setDraft({ ...draft, decisionModel: v })),
-              field(T('回退模型(决策失败时)', 'Fallback model'), draft.fallbackModel, (v: string) => setDraft({ ...draft, fallbackModel: v })),
+              h('div', { className: 'bar-field' },
+                h('label', null, T('决策模型', 'Decision model')),
+                h('select', { className: 'bar-input', value: draft.decisionModel, onChange: (e: any) => setDraft({ ...draft, decisionModel: e.target.value }) },
+                  ...(state.pool?.models ?? []).map((m: any) => h('option', { key: m.id, value: m.id }, m.id)))),
+              h('div', { className: 'bar-field' },
+                h('label', null, T('回退模型(决策失败时)', 'Fallback model')),
+                h('select', { className: 'bar-input', value: draft.fallbackModel, onChange: (e: any) => setDraft({ ...draft, fallbackModel: e.target.value }) },
+                  ...(state.pool?.models ?? []).map((m: any) => h('option', { key: m.id, value: m.id }, m.id)))),
               field(T('决策超时 ms', 'Decision timeout (ms)'), draft.decisionTimeoutMs, (v: string) => setDraft({ ...draft, decisionTimeoutMs: v })),
               field(T('单请求最多尝试模型数', 'Max attempts per request'), draft.maxAttempts, (v: string) => setDraft({ ...draft, maxAttempts: v })),
+            ),
+            h('div', { className: 'bar-row' },
+              h('div', { className: 'bar-field' },
+                h('label', null, T('候选排序策略', 'Candidate ordering strategy')),
+                h('select', { className: 'bar-input', value: draft.sortStrategy ?? 'auto', onChange: (e: any) => setDraft({ ...draft, sortStrategy: e.target.value }) },
+                  h('option', { value: 'auto' }, T('智能(任务匹配+均衡,默认)', 'Smart (task match + balance, default)')),
+                  h('option', { value: 'price' }, T('价格优先(便宜先用)', 'Price first (cheapest first)')),
+                  h('option', { value: 'capability' }, T('能力优先(旗舰先用)', 'Capability first')),
+                  h('option', { value: 'speed' }, T('速度优先(快先用)', 'Speed first')),
+                  h('option', { value: 'free_quota' }, T('薅免费额度(按桶轮转)', 'Free-quota rotation')))),
+              field(T('免费额度桶大小(tok)', 'Free-quota bucket (tok)'), draft.bucketTokens, (v: string) => setDraft({ ...draft, bucketTokens: v })),
+              field(T('额度完成容差(0–0.5)', 'Quota tolerance (0–0.5)'), draft.bucketTolerance, (v: string) => setDraft({ ...draft, bucketTolerance: v })),
             ),
             h('div', { className: 'bar-row' },
               field(T('额度耗尽冷却(分钟)', 'Quota cooldown (minutes)'), draft.quotaCooldownMinutes, (v: string) => setDraft({ ...draft, quotaCooldownMinutes: v })),
@@ -502,8 +561,9 @@
           ),
 
           // ---- task routes ----
-          h('div', { className: 'bar-card' },
+          show('route') && h('div', { className: 'bar-card' },
             h('h4', null, T('各任务类型候选模型(逗号/换行分隔,按优先级排序)', 'Task candidate lists (comma/newline separated, priority order)')),
+            h('div', { className: 'bar-muted', style: { fontSize: '11px' } }, T('清空某任务候选=按价格优先自动填充;排序策略在「路由与策略」页选择。', 'Emptying a task list = auto-fill price-first; pick ordering strategy on the Routing tab.')),
             h('div', { className: 'bar-row' },
               ...['image', 'writing', 'translation', 'code', 'reasoning', 'general'].map(task =>
                 h('div', { className: 'bar-field', key: task },
@@ -524,7 +584,7 @@
               })),
           ),
 
-          (() => {
+          show('pool') && (() => {
             const models = state.pool?.models ?? []
             const media = state.pool?.media ?? {}
             const quota = state.quota ?? []
@@ -601,7 +661,7 @@
           })(),
 
           // ---- per-model usage limits ----
-          h('div', { className: 'bar-card' },
+          show('pool') && h('div', { className: 'bar-card' },
             h('div', { className: 'bar-row' },
               h('h4', null, T('每模型额度上限', 'Per-model usage limits')),
               h('div', {
@@ -625,6 +685,8 @@
                   h('th', null, T('调用', 'Calls')),
                   h('th', null, T('token', 'Tokens')),
                   h('th', null, T('上限', 'Limit')),
+                  h('th', null, T('行内设置(次 / tok)', 'Inline cap (calls / tok)')),
+                  h('th', null, T('本key桶/累计', 'Key bucket / total')),
                   h('th', null, T('状态', 'Status')),
                   h('th', null, ''),
                 )),
@@ -641,6 +703,10 @@
                     h('td', null, String(usage.calls)),
                     h('td', null, String(usage.tokens)),
                     h('td', { className: 'bar-muted' }, limitText),
+                    h('td', null, h('div', { className: 'bar-row', style: { gap: '4px' } },
+                      h('input', { className: 'bar-input', style: { width: '70px' }, type: 'number', min: 1, placeholder: '次', defaultValue: limit?.maxCalls ?? '', onBlur: (e: any) => setLimit(m.id, 'maxCalls', e.target.value) }),
+                      h('input', { className: 'bar-input', style: { width: '90px' }, type: 'number', min: 1, placeholder: 'tok', defaultValue: limit?.maxTokens ?? '', onBlur: (e: any) => setLimit(m.id, 'maxTokens', e.target.value) }))),
+                    h('td', { className: 'bar-muted bar-mono' }, `${m.bucketTokens ?? 0} / ${m.ledgerTokens ?? 0}`),
                     h('td', null, limit === undefined
                       ? h(Badge, { tone: 'none', text: T('未设限', 'unlimited') })
                       : over
@@ -656,7 +722,7 @@
           ),
 
           // ---- integrity self-check ----
-          h('div', { className: 'bar-card' },
+          show('log') && h('div', { className: 'bar-card' },
             h('div', { className: 'bar-row' },
               h('h4', null, T('一键检测完整性', 'One-click integrity check')),
               h('div', { className: 'bar-btn bar-btn-primary', role: 'button', onClick: () => void runSelfCheck() },
@@ -676,7 +742,7 @@
           ),
 
           // ---- connection switcher ----
-        h('div', { className: 'bar-card' },
+        show('log') && h('div', { className: 'bar-card' },
           h('h4', null, T('阿里云连接(换账号时在这里切换)', 'Aliyun connection (switch accounts here)')),
           (state.candidates ?? []).length === 0
             ? h('div', { className: 'bar-muted' }, T(
@@ -707,7 +773,7 @@
         ),
 
         // ---- balancing & thinking ----
-        h('div', { className: 'bar-card' },
+        show('route') && h('div', { className: 'bar-card' },
           h('h4', null, T('负载均衡与思考档位', 'Load balancing & thinking effort')),
           h('div', { className: 'bar-row' },
             h('div', { className: 'bar-field' },
@@ -774,7 +840,7 @@
         ),
 
         // ---- pool composition ----
-        h('div', { className: 'bar-card' },
+        show('pool') && h('div', { className: 'bar-card' },
           h('div', { className: 'bar-row' },
             h('h4', null, T('模型池构成(来自本账号 /models 列表)', 'Pool composition (this account\'s /models)')),
             h('div', {
@@ -822,7 +888,7 @@
         ),
 
         // ---- history ----
-          h('div', { className: 'bar-card' },
+          show('log') && h('div', { className: 'bar-card' },
             h('div', { className: 'bar-row' },
               h('h4', null, T('最近路由决策(最多 50 条)', 'Recent routing decisions (last 50)')),
               h('div', {
@@ -841,7 +907,9 @@
                     h(Badge, { tone: r.ok ? 'ok' : 'err', text: r.ok ? T('成功', 'ok') : T('失败', 'failed') }),
                     h('span', { className: 'bar-mono' }, r.finalModel ?? '—'),
                     h('span', { className: 'bar-muted' }, `${fmtTime(r.at)} · ${r.task} · ${r.modality} · ${decisionSourceLabel(r.decisionSource)}`
-                      + (r.decisionTokens ? ` · 决策 ${r.decisionTokens} tok` : '')),
+                      + (r.decisionTokens ? ` · 决策 ${r.decisionTokens} tok` : '')
+                      + (r.tokens ? ` · 回答 ${r.tokens} tok` : '')
+                      + ` · ${r.origin === 'user' ? T('用户指定', 'user-pinned') : T('自动', 'auto')} · ${r.strategy ?? 'auto'}`),
                   ),
                   r.reasoning ? h('div', { className: 'bar-muted' }, r.reasoning) : null,
                   (r.attempts ?? []).length > 1
@@ -934,3 +1002,4 @@
     },
   })
 }
+

@@ -25,10 +25,11 @@ import type { Config, RouterOptions } from './config.js'
 import { discoverConnection } from './connection.js'
 import type { DiscoveredConnection } from './connection.js'
 import type { AttachmentsLike, CredentialsLike, HostContext } from './context.js'
-import { decideRoute } from './decision.js'
+import { decideRoute, analyzeRequest } from './decision.js'
 import type { RouteDecision } from './decision.js'
-import { buildPool, pickDefaultModels } from './pool.js'
+import { buildPool, pickDefaultModels, rankForTask } from './pool.js'
 import type { Pool } from './pool.js'
+import { resolveKeyId, parseUserModelDirective } from './identity.js'
 import { BailianClient } from './http.js'
 import { generateImage } from './media.js'
 import { serializeMessages, serializeTools, streamAttempt } from './wire.js'
@@ -65,6 +66,8 @@ export interface RouterSnapshot {
   readonly options: RouterOptions
   readonly entries: readonly PoolEntryView[]
   readonly pool: Pool
+  /** Local ledger identity of the connection in use. */
+  readonly keyId: string
   /** Connection inherited from an existing profile provider, when adopted. */
   readonly adopted?: DiscoveredConnection
   /** Whether the configured decision/fallback model is absent from this account. */
@@ -109,7 +112,7 @@ export async function resolveApiKey(ctx: HostContext, refs: readonly string[], d
         value = hit?.value
       } catch (_credentialStoreFailure) { /* fall through to the environment */ }
     }
-    if (value === undefined || value.trim().length === 0) value = (typeof process !== 'undefined' ? process.env : {})[ref]
+    if (value === undefined || value.trim().length === 0) value = process.env[ref]
     if (value === undefined || value.trim().length === 0) continue
     // eslint-disable-next-line no-control-regex
     if (/[\u0000-\u001f\u007f]/.test(value)) {
@@ -230,6 +233,7 @@ export class Router {
       options: withDefaults,
       entries,
       pool,
+      keyId: resolveKeyId({ activeAccountId: withDefaults.activeAccountId, baseURL: withDefaults.baseURL, apiKeyEnv: withDefaults.apiKeyEnv }),
       ...(adopted === undefined ? {} : { adopted }),
       ...(derived.decisionDerived || derived.fallbackDerived
         ? { derived: { decisionModel: derived.decisionDerived, fallbackModel: derived.fallbackDerived } }
@@ -283,6 +287,43 @@ export class Router {
   }
 
   /**
+   * Resolve a user-pinned model for this request: either the one-shot
+   * `pendingUserModel` override or a `/model <id>` / `@model:<id>` prefix on the
+   * last user message. The directive is stripped from the outgoing text.
+   * Returns undefined when absent or when the id is not routable right now.
+   */
+  private takeUserModel(options: GenerateOptions, snapshot: RouterSnapshot): { model: string; options: GenerateOptions } | undefined {
+    let pinned = this.store.state.pendingUserModel
+    if (pinned !== undefined) {
+      delete this.store.state.pendingUserModel
+      this.store.scheduleWrite()
+    }
+    let messages = options.messages
+    if (pinned === undefined) {
+      const msgs = options.messages ?? []
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const message = msgs[i]
+        if (message?.role !== 'user') continue
+        const text = (message.content ?? []).filter(block => block.type === 'text').map(block => String(block.text ?? '')).join('\n')
+        const match = /^\s*(?:\/model\s+|@model:)([A-Za-z0-9._/-]+)/.exec(text)
+        if (match !== null) {
+          pinned = match[1]
+          messages = msgs.map((entry, index) => index === i
+            ? { ...entry, content: (entry.content ?? []).map(block => block.type === 'text'
+              ? { ...block, text: String(block.text ?? '').replace(/^\s*(?:\/model\s+|@model:)[A-Za-z0-9._/-]+\s*/, '') }
+              : block) }
+            : entry)
+        }
+        break
+      }
+    }
+    if (pinned === undefined) return undefined
+    const entry = snapshot.pool.byId.get(pinned)
+    if (entry === undefined || !entry.traits.chat || this.store.inCooldown(pinned)) return undefined
+    return { model: pinned, options: { ...options, messages } }
+  }
+
+  /**
    * Stream one request through the virtual model: decide -> execute -> silently
    * fall back across candidates while nothing has been emitted yet.
    */
@@ -297,9 +338,29 @@ export class Router {
     const client = new BailianClient({
       baseURL: snapshot.options.baseURL, apiKey, streamIdleTimeoutMs: snapshot.options.streamIdleTimeoutMs,
     })
-    const decision: RouteDecision = await decideRoute(
-      options, snapshot.options, snapshot.pool, this.store, client, options.signal,
-    )
+    const userPick = this.takeUserModel(options, snapshot)
+    let origin: 'auto' | 'user' = 'auto'
+    let decision: RouteDecision
+    if (userPick !== undefined) {
+      // User pinned the model: skip the decision call entirely (0 decision tokens).
+      origin = 'user'
+      options = userPick.options
+      const analysis = analyzeRequest(options, snapshot.options.decisionInputMaxChars)
+      const ranked = rankForTask(analysis.heuristicTask, snapshot.pool, snapshot.options, analysis.hasImages)
+      decision = {
+        candidates: [userPick.model, ...ranked.filter(id => id !== userPick.model)],
+        chosen: userPick.model,
+        task: analysis.heuristicTask,
+        heuristicTask: analysis.heuristicTask,
+        decisionSource: 'heuristic',
+        reasoning: '用户自己对话中确定的模型',
+        decisionTokens: 0,
+      }
+    } else {
+      decision = await decideRoute(
+        options, snapshot.options, snapshot.pool, this.store, client, options.signal,
+      )
+    }
 
     // Deterministic short-circuit (e.g. video intent with no video model): reply
     // without calling any model, so the turn costs zero tokens.
@@ -359,6 +420,9 @@ export class Router {
       ...(decision.decisionSource === 'model' ? { decisionModel: snapshot.options.decisionModel } : {}),
       ...(decision.reasoning ? { reasoning: decision.reasoning } : {}),
       ...(decision.decisionTokens ? { decisionTokens: decision.decisionTokens } : {}),
+      origin,
+      strategy: snapshot.options.sortStrategy,
+      keyId: snapshot.keyId,
       attempts: [],
       ok: false,
     }
@@ -404,6 +468,8 @@ export class Router {
         // task, while history and the panel show the decided task.
         this.store.recordUsage(decision.heuristicTask, model, tokens)
         if (decision.task !== decision.heuristicTask) this.store.recordUsage(decision.task, model, tokens)
+        this.store.recordLedgerTokens(snapshot.keyId, model, tokens)
+        record.tokens = tokens
         // Learn capability facts from real outcomes.
         if (hasImageContent(options)) this.store.confirmVision(model)
         record.attempts.push({ model, ok: true })

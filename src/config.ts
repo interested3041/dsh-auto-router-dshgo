@@ -14,6 +14,9 @@ import {
 } from './catalog.js'
 import type { CatalogModel, TaskType } from './catalog.js'
 
+/** Candidate-ordering strategy. `free_quota` rotates models by token bucket. */
+export type SortStrategy = 'auto' | 'price' | 'capability' | 'speed' | 'free_quota'
+
 /** One user-declared execution-model pool entry. */
 export interface ConfigModel {
   id: string
@@ -43,6 +46,10 @@ export interface SavedAccount {
   apiKey?: string
   /** Credential reference resolved via the credentials service / environment. */
   apiKeyEnv?: string
+  /** Upstream provider/model id shown as secondary label in the UI. */
+  providerId?: string
+  /** Vendor tag; `auto`/absent detects from `baseURL`. */
+  vendor?: 'auto' | VendorId
 }
 
 import { vendorKeyRefs, type VendorId } from './vendors.js'
@@ -87,6 +94,12 @@ export interface Config {
   excludeModels: Volatile<string[]>
   /** `balanced` spreads load across equally suitable models; `quality` always takes the best. */
   balanceStrategy: Volatile<'balanced' | 'quality'>
+  /** Candidate ordering: price / capability / speed / free-quota bucket rotation. */
+  sortStrategy: Volatile<SortStrategy>
+  /** Free-quota bucket size in tokens (default 1M); rotation triggers near this. */
+  bucketTokens: Volatile<number>
+  /** Bucket tolerance fraction (0.05 = rotate between 95% and 105% of bucket). */
+  bucketTolerance: Volatile<number>
   /** How many near-equal candidates participate in the rotation. */
   balanceWindow: Volatile<number>
   /** Optional score-distance guard for the rotation set (0 = rotate the top `balanceWindow` only). */
@@ -140,6 +153,8 @@ const accountSchema = z.object({
   baseURL: z.string().required(),
   apiKey: z.string().role('secret'),
   apiKeyEnv: z.string().role('credential-ref'),
+  providerId: z.string(),
+  vendor: z.union(['auto', 'bailian', 'siliconflow', 'openrouter', 'volcengine', 'zhipu', 'moonshot', 'deepseek', 'generic'] as const),
 })
 
 /** Loader-validated plugin configuration schema. */
@@ -163,6 +178,9 @@ export const Config = z.object({
   includeSpecialEndpoints: z.boolean().default(false).volatile(),
   excludeModels: z.array(z.string()).default([]).volatile(),
   balanceStrategy: z.union(['balanced', 'quality'] as const).default('balanced').volatile(),
+  sortStrategy: z.union(['auto', 'price', 'capability', 'speed', 'free_quota'] as const).default('auto').volatile(),
+  bucketTokens: z.number().step(1000).min(1000).max(100_000_000).default(1_000_000).volatile(),
+  bucketTolerance: z.number().min(0).max(0.5).default(0.05).volatile(),
   balanceWindow: z.number().step(1).min(1).max(20).default(6).volatile(),
   balanceBand: z.number().min(0).max(60).default(0).volatile(),
   balanceWindowHours: z.number().step(1).min(1).max(720).default(24).volatile(),
@@ -201,6 +219,9 @@ export interface RouterOptions {
   readonly includeSpecialEndpoints: boolean
   readonly excludeModels: readonly string[]
   readonly balanceStrategy: 'balanced' | 'quality'
+  readonly sortStrategy: SortStrategy
+  readonly bucketTokens: number
+  readonly bucketTolerance: number
   readonly balanceWindow: number
   readonly balanceBand: number
   readonly balanceWindowHours: number
@@ -306,7 +327,16 @@ export function resolveOptions(config: Config): RouterOptions {
     seenAccount.add(id)
     const apiKey = typeof entry.apiKey === 'string' && entry.apiKey.trim().length > 0 ? entry.apiKey.trim() : undefined
     const ref = typeof entry.apiKeyEnv === 'string' && entry.apiKeyEnv.trim().length > 0 ? entry.apiKeyEnv.trim() : undefined
-    accounts.push({ id, name, baseURL: base, ...(apiKey === undefined ? {} : { apiKey }), ...(ref === undefined ? {} : { apiKeyEnv: ref }) })
+    const providerId = typeof entry.providerId === 'string' && entry.providerId.trim().length > 0 ? entry.providerId.trim() : undefined
+    const accountVendor = (['auto', 'bailian', 'siliconflow', 'openrouter', 'volcengine', 'zhipu', 'moonshot', 'deepseek', 'generic'] as const)
+      .find(value => value === entry.vendor)
+    accounts.push({
+      id, name, baseURL: base,
+      ...(apiKey === undefined ? {} : { apiKey }),
+      ...(ref === undefined ? {} : { apiKeyEnv: ref }),
+      ...(providerId === undefined ? {} : { providerId }),
+      ...(accountVendor === undefined ? {} : { vendor: accountVendor }),
+    })
   }
   const activeAccountId = String(plain(config.activeAccountId) ?? '').trim()
   const vendor = (['auto', 'bailian', 'siliconflow', 'openrouter', 'volcengine', 'zhipu', 'moonshot', 'deepseek', 'generic'] as const)
@@ -334,6 +364,10 @@ export function resolveOptions(config: Config): RouterOptions {
       .filter((pattern): pattern is string => typeof pattern === 'string' && pattern.trim().length > 0)
       .map(pattern => pattern.trim()),
     balanceStrategy: plain(config.balanceStrategy) === 'quality' ? 'quality' : 'balanced',
+    sortStrategy: (['auto', 'price', 'capability', 'speed', 'free_quota'] as const)
+      .find(value => value === plain(config.sortStrategy)) ?? 'auto',
+    bucketTokens: positiveInt(Number(plain(config.bucketTokens)), 1_000_000, 1000),
+    bucketTolerance: Math.max(0, Math.min(0.5, Number(plain(config.bucketTolerance)) || 0.05)),
     balanceWindow: positiveInt(Number(plain(config.balanceWindow)), 6, 1),
     balanceBand: Math.max(0, Math.min(60, Number(plain(config.balanceBand)) || 0)),
     balanceWindowHours: positiveInt(Number(plain(config.balanceWindowHours)), 24, 1),

@@ -66,23 +66,11 @@ export async function generateImage(
     bytes = new Uint8Array(await response.arrayBuffer())
   }
   const directory = join(cwd, MEDIA_DIR)
+  await mkdir(directory, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const file = join(directory, `image-${stamp}.${extension}`)
+  await writeFile(file, bytes)
   const relative = `${MEDIA_DIR}/image-${stamp}.${extension}`
-  try {
-    await mkdir(directory, { recursive: true })
-    await writeFile(file, bytes)
-  } catch (_mobileFsUnavailable) {
-    // Mobile runtimes may lack a writable filesystem: keep the image in memory
-    // and surface it as a data URI rather than failing the whole turn.
-    const mime = extension === 'jpg' ? 'image/jpeg' : `image/${extension}`
-    const dataUri = `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`
-    return {
-      path: '',
-      model,
-      markdown: `已用 \`${model}\` 生成图片(本环境不落盘,内嵌显示)。\n\n![${prompt.slice(0, 60).replace(/[[\]]/g, ' ')}](${dataUri})`,
-    }
-  }
   return {
     path: file,
     model,

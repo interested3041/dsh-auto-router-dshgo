@@ -12,23 +12,14 @@ import { join, resolve } from 'node:path'
 /** Environment variable that overrides the default harness home. */
 const DSH_HOME_ENV = 'DSH_HOME'
 
-/** Mobile runtimes may not expose os.homedir(); fall back to cwd-relative. */
-function safeHomedir(): string {
-  try {
-    return homedir()
-  } catch {
-    return '.'
-  }
-}
-
 /**
  * Resolve the DeepSeek Harness home: `$DSH_HOME`, then `~/.dsh`.
  * @param env - environment mapping, defaults to the process environment.
  * @returns the absolute home directory.
  */
-export function resolveDshHome(env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {}): string {
+export function resolveDshHome(env: Record<string, string | undefined> = process.env): string {
   const configured = env[DSH_HOME_ENV]
-  const selected = configured !== undefined && configured.trim().length > 0 ? configured : join(safeHomedir(), '.dsh')
+  const selected = configured !== undefined && configured.trim().length > 0 ? configured : join(homedir(), '.dsh')
   return resolve(selected)
 }
 
