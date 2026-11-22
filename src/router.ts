@@ -121,7 +121,7 @@ export async function resolveApiKey(ctx: HostContext, refs: readonly string[], d
     return { key: value.trim(), ref }
   }
   throw new LlmError(
-    `${PROVIDER}: 未找到百炼 API Key。请设置 ${refs.join(' / ')} 之一(推荐写入 DSH 凭据服务,或在启动环境导出)`
+    `${PROVIDER}: 未找到 API Key。请设置 ${refs.join(' / ')} 之一(推荐写入 DSH 凭据服务,或在启动环境导出)`
     + ` (no Bailian API key found; set one of ${refs.join(', ')} through the credentials service or the launching environment)`,
     'MISSING_CREDENTIAL',
   )
@@ -409,7 +409,7 @@ export class Router {
       return
     }
     this.ctx.logger.info(
-      `[bailian-auto-router] task=${decision.task} modality=${decisionSourceLabel(decision)} -> ${decision.chosen}`
+      `[dsh-auto-router] task=${decision.task} modality=${decisionSourceLabel(decision)} -> ${decision.chosen}`
       + (decision.reasoning ? ` | ${decision.reasoning}` : ''),
     )
     const record: RouteRecord = {
@@ -502,7 +502,7 @@ export class Router {
         if (sessionId !== undefined) this.store.dropSession(sessionId)
         lastError = failure
         this.ctx.logger.warn(
-          `[bailian-auto-router] ${model} failed (${code}), cooldown ${Math.round(cooldownMs / 1000)}s; trying next candidate`,
+          `[dsh-auto-router] ${model} failed (${code}), cooldown ${Math.round(cooldownMs / 1000)}s; trying next candidate`,
         )
       }
     }

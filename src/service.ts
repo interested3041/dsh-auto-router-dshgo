@@ -142,6 +142,8 @@ export interface ConfigView {
   activeAccountId: string
   /** Per-model usage limits (`maxCalls` / `maxTokens`), empty = no limit. */
   modelLimits: Record<string, { maxCalls?: number; maxTokens?: number }>
+  /** Custom display names for discovered connections (`entryId|providerId` → name). */
+  connectionNames: Record<string, string>
   /** Candidate ordering strategy. */
   sortStrategy: 'auto' | 'price' | 'capability' | 'speed' | 'free_quota'
   /** Free-quota bucket size in tokens. */
@@ -523,6 +525,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
       accounts,
       activeAccountId: options.activeAccountId,
       modelLimits: { ...options.modelLimits },
+      connectionNames: { ...options.connectionNames },
       sortStrategy: options.sortStrategy,
       bucketTokens: options.bucketTokens,
       bucketTolerance: options.bucketTolerance,
@@ -783,7 +786,7 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
       } catch (error) {
         items.push({
           name: 'state.json 可写', ok: false, detail: String((error as Error)?.message ?? error).slice(0, 200),
-          hint: '检查 ~/.dsh/bailian-auto-router 目录权限',
+          hint: '检查 ~/.dsh/auto-router 状态目录权限',
         })
       }
 

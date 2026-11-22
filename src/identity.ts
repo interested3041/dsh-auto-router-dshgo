@@ -63,9 +63,13 @@ export function connectionFingerprint(connection: ConnectionView): string {
 export function dedupeConnections(connections: readonly ConnectionView[]): ConnectionView[] {
   const seen = new Set<string>()
   const out: ConnectionView[] = []
+  // The plugin's own rows (current, package and legacy component ids) are never
+  // switchable accounts.
+  const selfIds = new Set(['auto-router', 'dsh-auto-router', 'bailian-auto-router'])
   for (const connection of connections) {
     const idText = `${connection.id} ${connection.providerId ?? ''} ${connection.name}`
-    if (idText.includes(PROVIDER) || idText.includes(VIRTUAL_MODEL)) continue
+    if (idText.includes(PROVIDER) || idText.includes(VIRTUAL_MODEL)
+      || selfIds.has(connection.id) || selfIds.has(connection.providerId ?? '')) continue
     const fingerprint = connectionFingerprint(connection)
     if (seen.has(fingerprint)) continue
     seen.add(fingerprint)

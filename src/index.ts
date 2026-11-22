@@ -1,12 +1,13 @@
 /**
- * dsh-auto-router — decision-model router for Aliyun Bailian.
+ * dsh-auto-router — vendor-neutral decision-model router.
  *
- * Registers the virtual model `bailian-auto` ("百炼智能路由") with the harness
- * LLM service. Every request to it is first analyzed by the configurable
- * decision model (default `deepseek-v4.1-flash`), then routed to the best
- * available Bailian execution model with quota-aware cooldowns and a silent
- * fallback chain that never interrupts a conversation before visible output.
+ * Registers the virtual model "智能路由 Auto Router" with the harness LLM
+ * service. Every request to it is first analyzed by the configurable decision
+ * model, then routed to the best available execution model (any vendor) with
+ * quota-aware cooldowns and a silent fallback chain that never interrupts a
+ * conversation before visible output.
  */
+import { existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { BailianAutoAdapter } from './adapter.js'
 import { PROVIDER } from './catalog.js'
@@ -24,8 +25,8 @@ export type { ConfigModel, RouterOptions } from './config.js'
 export type { RouterStateView, ConfigPatch, BailianRouterService } from './service.js'
 export { REMOTE_ENDPOINTS } from './remote.js'
 
-/** Plugin row name used by the loader. */
-export const name = 'bailian-auto-router'
+/** Plugin row name used by the loader (vendor-neutral since 0.7.1). */
+export const name = 'auto-router'
 /** The LLM service is mandatory; everything else is resolved optionally. */
 export const inject = ['llm']
 
@@ -39,7 +40,14 @@ export function apply(ctx: HostContext, config: Config): void {
   // Fail loud on an unusable configuration at load time.
   resolveOptions(config)
 
-  const store = RouterStore.create(join(dshHomePath('bailian-auto-router'), 'state.json'))
+  // One-time migration of the legacy state directory (pre-0.7.1 name). If the
+  // legacy dir is still held open by another running host, keep using it.
+  const stateHome = dshHomePath('auto-router')
+  const legacyHome = dshHomePath('bailian-auto-router')
+  try {
+    if (!existsSync(stateHome) && existsSync(legacyHome)) renameSync(legacyHome, stateHome)
+  } catch { /* legacy dir in use; fall back below */ }
+  const store = RouterStore.create(join(existsSync(stateHome) ? stateHome : legacyHome, 'state.json'))
   const router = new Router(ctx, config, store)
   const adapter = new BailianAutoAdapter(router)
 

@@ -37,7 +37,7 @@ assert(clientSource.includes('__ModuleLoader__.load'), 'lib/client.js self-regis
 // 2. Host entry exports the loader contract.
 const host = await import(pathToFileURL(join(root, '..', 'lib', 'index.js')).href)
 assert(typeof host.apply === 'function', 'apply is a function')
-assert(host.name === 'bailian-auto-router', 'name is bailian-auto-router')
+assert(host.name === 'auto-router', 'name is auto-router')
 assert(Array.isArray(host.inject) && host.inject.includes('llm'), 'inject includes llm')
 assert(host.Config !== undefined, 'Config schema exported')
 assert(Array.isArray(host.REMOTE_ENDPOINTS) && host.REMOTE_ENDPOINTS.length === 15, 'REMOTE_ENDPOINTS lists the 15 endpoints')

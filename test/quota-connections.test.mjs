@@ -23,7 +23,7 @@ ok('bucketTokens override', () => assert.equal(resolveOptions({ bucketTokens: 50
 ok('bucketTolerance override', () => assert.equal(resolveOptions({ bucketTolerance: 0.2 }).bucketTolerance, 0.2))
 ok('invalid sortStrategy falls back auto', () => assert.equal(resolveOptions({ sortStrategy: 'bogus' }).sortStrategy, 'auto'))
 
-const self = { id: 'bailian-auto-router', name: 'bailian-auto-router', providerId: 'bailian-auto-router', baseURL: 'https://x', kind: 'discovered' }
+const self = { id: 'auto-router', name: 'auto-router', providerId: 'auto-router', baseURL: 'https://x', kind: 'discovered' }
 const real = { id: 'llm-pi-ai', name: '阿里云', providerId: 'bailian', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', credentialRef: 'DASHSCOPE_API_KEY', kind: 'discovered' }
 const dup = { ...real, id: 'llm-pi-ai-2', name: '阿里云副本' }
 const other = { id: 'sf', name: '硅基', providerId: 'siliconflow', baseURL: 'https://api.siliconflow.cn/v1', credentialRef: 'SF_KEY', kind: 'discovered' }

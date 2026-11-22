@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const { Router } = await import(pathToFileURL(join(root, 'lib', 'router.js')).href)
 const { RouterStore } = await import(pathToFileURL(join(root, 'lib', 'store.js')).href)
+const { resolveOptions } = await import(pathToFileURL(join(root, 'lib', 'config.js')).href)
 
 process.env.DASHSCOPE_API_KEY = 'sk-test-key'
 
@@ -53,7 +54,7 @@ const usageChunk = { usage: { prompt_tokens: 10, completion_tokens: 5, total_tok
 const mockCtx = {
   logger: { debug() {}, info() {}, warn() {}, error() {} },
   llm: { fileRequestText: ref => `[file ${ref?.attachmentId ?? '?'}]` },
-  fiber: { entry: { options: { id: 'bailian-auto-router', name: 'dsh-bailian-auto-router' } } },
+  fiber: { entry: { options: { id: 'auto-router', name: 'dsh-auto-router' } } },
   effect() {}, on() { return () => {} }, get() { return undefined }, provide() {}, inject() {},
 }
 
@@ -632,9 +633,9 @@ const qwenOk = (body, res) => {
   handler = behaviorHandler({ 'qwen3.8-max': qwenOk, 'deepseek-v4-pro': (body, res) => { if (body.stream === true) sseOk(res, [deltaChunk('token超限', { finish_reason: 'stop' }), usageChunk]) } }, calls2)
   const { router: router2, store: store2 } = await makeRouter({
     enableDecision: false, balanceStrategy: 'quality', taskRoutes: routesN,
-    modelLimits: { 'qwen3.8-max': { maxTokens: 100 } },
+    modelLimits: { 'qwen3.8-max': { maxTokens: 100000 } },
   })
-  store2.recordUsage('code', 'qwen3.8-max', 120)
+  store2.recordUsage('code', 'qwen3.8-max', 120000)
   const chunks2 = await collect(router2.stream(userRequest('重构 function 去重并分析复杂度'), router2.capture()))
   const exec2 = calls2.find(call => call.stream === true)
   assert(exec2?.model === 'deepseek-v4-pro', `N: token 超限同样停用该模型 (got ${exec2?.model})`)
@@ -645,6 +646,9 @@ const qwenOk = (body, res) => {
   storeN3.recordUsage('code', 'qwen3.8-max', 50)
   assert(storeN3.withinLimit('qwen3.8-max', { 'qwen3.8-max': { maxCalls: 1 } }) === false, 'N: 达到调用上限后 withinLimit=false')
   assert(storeN3.withinLimit('qwen3.8-max', { 'qwen3.8-max': { maxTokens: 20 } }) === false, 'N: 达到 token 上限后 withinLimit=false')
+  // 0.7.1: legacy tiny raw-token caps are migrated as 万 (10k) units.
+  const migrated = resolveOptions({ modelLimits: { m: { maxTokens: 100 } } })
+  assert(migrated.modelLimits.m.maxTokens === 1000000, 'N: 旧版小值限额按万迁移 100→1M')
   storeN3.resetModelTotals('qwen3.8-max')
   assert(storeN3.withinLimit('qwen3.8-max', { 'qwen3.8-max': { maxCalls: 1 } }) === true, 'N: resetModelTotals 清除计数后重新可用')
   assert(storeN3.resetModelTotals === storeN3.resetModelTotals, 'N: resetModelTotals 可调用')

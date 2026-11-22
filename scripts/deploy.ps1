@@ -2,7 +2,7 @@
 # 用法: powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
 # 选项: -SkipStop 只部署不停止; -NoStart 只停+部署不起; -InstallDir 自定义安装目录
 param(
-  [string]$InstallDir = 'D:\Downloads\DSH\plugins\dsh-auto-router',
+  [string]$InstallDir = 'D:\Downloads\DSH\plugins\dsh-auto-router-dshgo',
   [string]$HostExe = 'D:\SoftWare\DSH\lastest-officially\DSH NEXT.exe',
   [switch]$SkipStop,
   [switch]$NoStart

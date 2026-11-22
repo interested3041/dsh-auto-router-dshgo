@@ -124,6 +124,8 @@ export interface Config {
   activeAccountId: Volatile<string>
   /** Per-model usage limits (max calls and/or max tokens); exceeding stops routing that model. */
   modelLimits: Volatile<Record<string, ModelLimit>>
+  /** User-assigned display names for discovered connections, keyed `entryId|providerId`. */
+  connectionNames: Volatile<Record<string, string>>
 }
 
 /** One model's configured usage limit; at least one field should be set. */
@@ -196,6 +198,7 @@ export const Config = z.object({
     maxCalls: z.number().step(1).min(1),
     maxTokens: z.number().step(1).min(1),
   })).default({}).volatile(),
+  connectionNames: z.dict(z.string()).default({}).volatile(),
 })
 
 /** Detached, validated settings snapshot captured per request/operation. */
@@ -236,6 +239,8 @@ export interface RouterOptions {
   /** Active saved account id; empty = use `baseURL`/`apiKeyEnv` (or auto-adopt). */
   readonly activeAccountId: string
   readonly modelLimits: Record<string, { maxCalls?: number; maxTokens?: number }>
+  /** Custom display names for discovered connections (`entryId|providerId` → name). */
+  readonly connectionNames: Record<string, string>
   /** Direct API key of the active saved account, when it stores one (never logged). */
   readonly apiKeyDirect?: string
   /** Credential references tried in order; the first configured one wins. */
@@ -267,9 +272,12 @@ function resolveModelLimits(raw: unknown): Record<string, { maxCalls?: number; m
     const callsOk = Number.isSafeInteger(maxCalls) && maxCalls >= 1
     const tokensOk = Number.isSafeInteger(maxTokens) && maxTokens >= 1
     if (!callsOk && !tokensOk) continue
+    // 0.7.1: the pre-0.7.1 UI wrote raw tokens; tiny values (<1000) were meant
+    // as 万 (10k) tokens by users. Migrate them so a "100" cap becomes 1M.
+    const migratedTokens = tokensOk && maxTokens < 1000 ? maxTokens * 10_000 : maxTokens
     out[model] = {
       ...(callsOk ? { maxCalls } : {}),
-      ...(tokensOk ? { maxTokens } : {}),
+      ...(tokensOk ? { maxTokens: migratedTokens } : {}),
     }
   }
   return out
@@ -381,7 +389,18 @@ export function resolveOptions(config: Config): RouterOptions {
     accounts,
     activeAccountId: accounts.some(account => account.id === activeAccountId) ? activeAccountId : '',
     modelLimits: resolveModelLimits(plain(config.modelLimits)),
+    connectionNames: resolveConnectionNames(plain(config.connectionNames)),
   }
+}
+
+/** Keep only non-empty string names; anything else is dropped. */
+function resolveConnectionNames(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (typeof raw !== 'object' || raw === null) return out
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === 'string' && value.trim() !== '') out[key] = value.trim()
+  }
+  return out
 }
 
 /**

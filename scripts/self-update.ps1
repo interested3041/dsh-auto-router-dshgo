@@ -3,7 +3,7 @@
 param(
   [Parameter(Mandatory = $true)][string]$Tag,
   [string]$Repo = 'interested3041/dsh-auto-router-dshgo',
-  [string]$InstallDir = 'D:\dsh\plugins\dsh-auto-router-dshgo',
+  [string]$InstallDir = 'D:\Downloads\DSH\plugins\dsh-auto-router-dshgo',
   [string]$HostExe = 'D:\SoftWare\DSH\lastest-officially\DSH NEXT.exe'
 )
 $ErrorActionPreference = 'Stop'
