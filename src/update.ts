@@ -75,6 +75,6 @@ export function applyUpdate(tag: string, repo: string = UPDATE_REPO): { started:
   // apply here. Report the available version and point to the mobile flow.
   return {
     started: false,
-    message: `v${tag} available. dshgo (mobile) updates via the phone-side install flow, not a desktop restart. See ${`https://github.com/${repo}/releases/latest`}`,
+    message: `v${tag} available. dshgo (mobile) updates via the phone-side install flow, not a desktop restart. See https://github.com/${repo}/releases/latest`,
   }
 }

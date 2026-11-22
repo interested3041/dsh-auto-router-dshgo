@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "智能路由 Auto Router",
-    "description": "注册虚拟模型 bailian-auto(显示名「智能路由 Auto Router」)。单 key 多模型:决策模型分析模态与任务类型后,路由到同一账号下最合适的执行模型;支持百炼/硅基流动/OpenRouter/火山方舟/智谱/Moonshot/DeepSeek 等 OpenAI 兼容厂商;内置额度感知冷却、静默回退与失败切换;移动端无 fs 时图片改 data URI 兜底。",
+    "description": "注册虚拟模型「智能路由 Auto Router」。单 key 多模型:决策模型分析模态与任务后,路由到同一账号下最合适的执行模型;多厂商适配(硅基流动/OpenRouter/火山方舟/智谱/Moonshot/DeepSeek/百炼等任意 OpenAI 兼容平台,不绑定单一厂商)。亮点:薅免费额度优先、每-key token 台账与同接口继承、对话中 /model 指定模型、行内限额、价格/能力/速度/智能四种排序。内置额度感知冷却、静默回退与失败切换。提示:复杂问题会派给更强模型,余额消耗可能加快。",
     "detail": "docs/DETAIL.md"
   }
 }

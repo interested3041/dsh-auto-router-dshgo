@@ -180,6 +180,28 @@
         return h('span', { className: cls }, props.text)
       }
 
+      /** Searchable dropdown (0.7): type to filter, click to pick. Shows labels, not raw ids. */
+      function Combobox(props: { value: string; options: { value: string; label: string }[]; onChange: (v: string) => void; placeholder?: string }) {
+        const [open, setOpen] = useState(false)
+        const [q, setQ] = useState('')
+        const cur = props.options.find(o => o.value === props.value)
+        const list = props.options.filter(o => `${o.label} ${o.value}`.toLowerCase().includes(q.toLowerCase()))
+        return h('div', { style: { position: 'relative', minWidth: '200px', flex: '1 1 200px' } },
+          h('input', {
+            className: 'bar-input', placeholder: props.placeholder,
+            value: open ? q : (cur ? cur.label : props.value),
+            onFocus: () => { setOpen(true); setQ('') },
+            onChange: (e: any) => { setQ(e.target.value); setOpen(true) },
+            onBlur: () => { setTimeout(() => setOpen(false), 150) },
+          }),
+          open ? h('div', { style: { position: 'absolute', zIndex: 60, left: 0, right: 0, maxHeight: '220px', overflow: 'auto', background: 'var(--dsw-alias-bg-layer-2)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: '6px', marginTop: '2px' } },
+            list.length === 0 ? h('div', { className: 'bar-muted', style: { padding: '6px 8px' } }, T('无匹配', 'No match'))
+              : list.slice(0, 100).map(o => h('div', {
+                key: o.value, style: { padding: '5px 8px', cursor: 'pointer' },
+                onMouseDown: () => { props.onChange(o.value); setOpen(false); setQ('') },
+              }, o.label))) : null)
+      }
+
       // ---- main panel -----------------------------------------------------------
       function Panel(props: { ctx?: any }) {
         const ctx = props.ctx
@@ -194,9 +216,13 @@
         const [tab, setTab] = useState<'account' | 'route' | 'pool' | 'log'>('account')
         const show = (name: string) => tab === name
         const [upd, setUpd] = useState<any>(null)
+        const [updBusy, setUpdBusy] = useState(false)
+        const [selAcct, setSelAcct] = useState<string | null>(null)
         const checkUpdate = useCallback(async () => {
           if (!remote) return
+          setUpdBusy(true)
           try { setUpd(unwrap(await remote.checkUpdate())) } catch (_e) { /* offline: ignore */ }
+          if (alive.current) setUpdBusy(false)
         }, [remote])
         useEffect(() => { void checkUpdate() }, [checkUpdate])
         const alive = useRef(true)
@@ -366,10 +392,11 @@
         // ---- API account selection & management --------------------------------
         const accounts: any[] = cfg.accounts ?? []
         const activeAccountId: string = cfg.activeAccountId ?? ''
-        const accountSelectValue = activeAccountId !== ''
+        const accountSelectValue = selAcct ?? (activeAccountId !== ''
           ? `acct:${activeAccountId}`
-          : state.adopted ? `conn:${state.adopted.entryId}|${state.adopted.providerId}` : ''
+          : state.adopted ? `conn:${state.adopted.entryId}|${state.adopted.providerId}` : '')
         const onAccountSelect = (value: string) => {
+          setSelAcct(value)
           if (value.startsWith('acct:')) {
             void mutate(() => remote.activateAccount(value.slice(5)), T('已切换账号并重新同步模型池', 'Account switched and pool resynced'))
           } else if (value.startsWith('conn:')) {
@@ -413,7 +440,7 @@
 
           // ---- tab bar (0.6 paged UI) ----
           h('div', { className: 'bar-row', style: { gap: '6px' } },
-            ...([['account', T('账号与连接', 'Accounts')], ['route', T('路由与策略', 'Routing')], ['pool', T('模型池与限额', 'Pool & limits')], ['log', T('日志与自检', 'Logs & check')]] as [string, string][]).map(([key, label]) =>
+            ...([['account', T('账号与更新', 'Accounts')], ['route', T('路由与策略', 'Routing')], ['pool', T('模型池与限额', 'Pool & limits')], ['log', T('自检与日志', 'Check & logs')]] as [string, string][]).map(([key, label]) =>
               h('div', {
                 key, className: tab === key ? 'bar-btn bar-btn-primary' : 'bar-btn', role: 'button',
                 onClick: () => setTab(key as any),
@@ -427,7 +454,7 @@
               h('span', { className: 'bar-muted bar-mono' }, `${T('当前', 'Current')} ${upd?.current ?? '…'} → ${T('最新', 'Latest')} ${upd?.latest ?? '…'}`),
             ),
             h('div', { className: 'bar-row' },
-              h('div', { className: 'bar-btn', role: 'button', onClick: () => void checkUpdate() }, T('检查更新', 'Check for updates')),
+              h('div', { className: 'bar-btn', role: 'button', onClick: () => void checkUpdate() }, updBusy ? T('检查中…', 'Checking…') : T('检查更新', 'Check for updates')),
               upd?.hasUpdate ? h('div', {
                 className: 'bar-btn bar-btn-primary', role: 'button',
                 onClick: () => void mutate(() => remote.applyUpdate(upd.latest), T('更新已启动,宿主将自动重启(停→部署→启动→校验)', 'Updater started; host will restart (stop→deploy→start→verify)')),
@@ -442,24 +469,21 @@
               h('h4', null, T('智能路由 Auto Router · 状态', 'Auto router · status')),
               h(Badge, { tone: cfg.apiKeyConfigured ? 'ok' : 'err', text: cfg.apiKeyConfigured ? T('API Key 已配置', 'API key set') : T('API Key 未配置', 'API key missing') }),
               h(Badge, { tone: cfg.enableDecision ? 'ok' : 'warn', text: cfg.enableDecision ? T('决策模型开启', 'decision on') : T('决策模型关闭(启发式)', 'decision off (heuristic)') }),
-              h('span', { className: 'bar-muted bar-mono' }, `${state.provider}/${state.model}`),
+              h('span', { className: 'bar-muted bar-mono' }, state.modelName ?? T('智能路由 Auto Router', 'Auto Router')),
             ),
             h('div', { className: 'bar-row' },
               h('label', { className: 'bar-muted' }, T('当前 API 账号', 'Active API account')),
-              h('select', {
-                className: 'bar-input',
-                style: { maxWidth: '460px' },
+              h(Combobox, {
                 value: accountSelectValue,
-                onChange: (e: any) => onAccountSelect(e.target.value),
-              },
-                h('option', { value: '' }, T('默认接口 / 自动沿用', 'Default endpoint / auto-adopt')),
-                ...accounts.map((a: any) => h('option', { key: a.id, value: `acct:${a.id}` }, a.name)),
-                ...(state.connections ?? []).map((c: any) => h('option', {
-                  key: `${c.id}|${c.providerId}`,
-                  value: `conn:${c.id}|${c.providerId}`,
-                }, T('profile 连接: ', 'Profile: ') + `${c.name} → ${c.providerId}`)),
-              ),
-              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('切换后自动重新同步模型池并重置冷却', 'Switching resyncs the pool and resets cooldowns')),
+                onChange: onAccountSelect,
+                placeholder: T('搜索账号 / 厂商…', 'Search account / vendor…'),
+                options: [
+                  { value: '', label: T('默认接口 / 自动沿用', 'Default endpoint / auto-adopt') },
+                  ...accounts.map((a: any) => ({ value: `acct:${a.id}`, label: a.name })),
+                  ...(state.connections ?? []).map((c: any) => ({ value: `conn:${c.id}|${c.providerId}`, label: c.providerId })),
+                ],
+              }),
+              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('切换后自动重新同步模型池;台账按 key 记忆,同接口可继承', 'Switching resyncs the pool; ledger is per-key, same endpoint can inherit')),
             ),
             h('div', { className: 'bar-row bar-muted', style: { fontSize: '11px' } },
               h('span', null, T('本地台账: ', 'Local ledger: '), h('span', { className: 'bar-mono' }, `${state.keyLedger?.totalTokens ?? 0} tok · 周期 ${state.keyLedger?.cycle ?? 0}`)),
@@ -491,8 +515,8 @@
               ))
               : (state.candidates ?? []).length > 0
                 ? h('div', { className: 'bar-muted' }, T(
-                  `检测到 ${state.candidates.length} 个阿里云兼容连接;把「接口」设为默认值可自动沿用。`,
-                  `${state.candidates.length} Aliyun-compatible connection(s) found; keep the shipped endpoint to reuse one.`,
+                  `检测到 ${state.candidates.length} 个 OpenAI 兼容连接(任意厂商);在上方账号下拉选择即可切换。`,
+                  `${state.candidates.length} OpenAI-compatible connection(s) found (any vendor); pick one in the account dropdown above.`,
                 ))
                 : null,
             state.pool?.lastSyncError ? h('div', { className: 'bar-error' }, T('同步失败: ', 'Sync failed: '), state.pool.lastSyncError) : null,
@@ -555,12 +579,10 @@
             h('div', { className: 'bar-row' },
               h('div', { className: 'bar-field' },
                 h('label', null, T('决策模型', 'Decision model')),
-                h('select', { className: 'bar-input', value: draft.decisionModel, onChange: (e: any) => setDraft({ ...draft, decisionModel: e.target.value }) },
-                  ...(state.pool?.models ?? []).map((m: any) => h('option', { key: m.id, value: m.id }, m.id)))),
+                h(Combobox, { value: draft.decisionModel, onChange: (v: string) => setDraft({ ...draft, decisionModel: v }), placeholder: T('搜索模型…', 'Search model…'), options: (state.pool?.models ?? []).map((m: any) => ({ value: m.id, label: m.id })) })),
               h('div', { className: 'bar-field' },
                 h('label', null, T('回退模型(决策失败时)', 'Fallback model')),
-                h('select', { className: 'bar-input', value: draft.fallbackModel, onChange: (e: any) => setDraft({ ...draft, fallbackModel: e.target.value }) },
-                  ...(state.pool?.models ?? []).map((m: any) => h('option', { key: m.id, value: m.id }, m.id)))),
+                h(Combobox, { value: draft.fallbackModel, onChange: (v: string) => setDraft({ ...draft, fallbackModel: v }), placeholder: T('搜索模型…', 'Search model…'), options: (state.pool?.models ?? []).map((m: any) => ({ value: m.id, label: m.id })) })),
               field(T('决策超时 ms', 'Decision timeout (ms)'), draft.decisionTimeoutMs, (v: string) => setDraft({ ...draft, decisionTimeoutMs: v })),
               field(T('单请求最多尝试模型数', 'Max attempts per request'), draft.maxAttempts, (v: string) => setDraft({ ...draft, maxAttempts: v })),
             ),
@@ -587,6 +609,19 @@
             ),
           ),
 
+          // ---- 0.7 cost & free-quota notices ----
+          show('route') && h('div', { className: 'bar-card' },
+            h('h4', null, T('费用与免费额度提示', 'Cost & free-quota notes')),
+            h('div', { className: 'bar-muted' }, T(
+              '① 选智能路由会加快余额消耗:复杂问题会被派给更强(也更贵)的模型,单题成本可能高于固定用一个便宜模型,但处理效果更优。想省钱可选「价格优先」。',
+              '① Auto routing spends balance faster: hard questions go to stronger (pricier) models, costing more per query than a fixed cheap model, but with better results. Pick "Price first" to save.',
+            )),
+            h('div', { className: 'bar-muted' }, T(
+              '② 薅免费额度优先=每个模型先用满一桶免费额度再换下一个,把各家送的额度都薅一遍(比任何单一排序薅得多)。台账按 key 记忆:切换排序不重置,只有换 key 才重置;换 key 又换回可能使该 key 超出免费额度,建议配合厂商「用完即停」。同接口旧 key 可一键继承台账。',
+              '② Free-quota first drains one bucket per model before moving on, milking every vendor\'s free grant. The ledger is per-key: switching strategy never resets it, only a key change does; switching away and back may push a key past its free quota — pair with the vendor\'s "stop when exhausted". Same-endpoint old keys can inherit.',
+            )),
+          ),
+
           // ---- task routes ----
           show('route') && h('div', { className: 'bar-card' },
             h('h4', null, T('各任务类型候选模型(逗号/换行分隔,按优先级排序)', 'Task candidate lists (comma/newline separated, priority order)')),
@@ -599,6 +634,11 @@
                     className: 'bar-textarea',
                     value: draft.taskRoutesText?.[task] ?? '',
                     onChange: (e: any) => setDraft({ ...draft, taskRoutesText: { ...draft.taskRoutesText, [task]: e.target.value } }),
+                  }),
+                  h(Combobox, {
+                    value: '', placeholder: T('+ 选模型加入(按顺序)', '+ pick model to append'),
+                    options: (state.pool?.models ?? []).map((m: any) => ({ value: m.id, label: m.id })),
+                    onChange: (v: string) => setDraft({ ...draft, taskRoutesText: { ...draft.taskRoutesText, [task]: ((draft.taskRoutesText?.[task] ?? '').trim() ? draft.taskRoutesText[task].trim() + ', ' : '') + v } }),
                   })))),
             h('div', { className: 'bar-field' },
               h('label', null, T(
@@ -644,6 +684,9 @@
                 h('td', null, String(q?.fails ?? 0)),
                 h('td', null, String(q?.calls ?? 0)),
                 h('td', { className: 'bar-muted' }, q?.lastFailCode ?? '—'),
+                h('td', null, h('div', { className: 'bar-row', style: { gap: '4px' } },
+                  h('input', { className: 'bar-input', style: { width: '88px' }, type: 'number', min: 1, placeholder: '1M', defaultValue: state.config?.modelLimits?.[id]?.maxTokens ?? '', onBlur: (e: any) => setLimit(id, 'maxTokens', e.target.value) }),
+                  h('div', { className: 'bar-btn', role: 'button', title: T('设 1M token 上限', 'Set 1M token cap'), onClick: () => setLimit(id, 'maxTokens', '1000000') }, '1M'))),
                 h('td', null, available ? null : h('div', {
                   className: 'bar-btn', role: 'button',
                   onClick: () => void mutate(() => remote.resetQuota(id), T('已解除冷却: ', 'Cooldown cleared: ') + id),
@@ -677,6 +720,7 @@
                         h('th', null, T('连败', 'Fails')),
                         h('th', null, T('调用', 'Calls')),
                         h('th', null, T('错误', 'Error')),
+                        h('th', null, T('限额(tok)', 'Cap (tok)')),
                         h('th', null, ''),
                       )),
                       h('tbody', null, g.ids.slice(0, 300).map((id) => modelRow(id))),
@@ -697,14 +741,9 @@
               }, T('重置全部用量', 'Reset all usage')),
             ),
             h('div', { className: 'bar-muted' }, T(
-              '给单个模型设用量上限(token 和/或调用次数),达到上限就停用它并路由下一个;不设=自动均衡。JSON: { "模型id": { "maxCalls": 100, "maxTokens": 1000000 } },把某模型的值设为 null 即清除它的上限。',
-              'Set a per-model cap (tokens and/or calls). Reaching it stops the model and routing moves on; unset = auto-balance. JSON: { "model-id": { "maxCalls": 100, "maxTokens": 1000000 } }; null clears a model\'s limit.',
+              '在上方模型池每行的「限额」框或下方表格直接填 token/次数上限,点「1M」一键设 100 万 token;达到上限自动路由下一个。清空=不限。无需手写 JSON。',
+              'Set a per-model cap in the pool row or the table below; "1M" sets a 1,000,000-token cap. Reaching it routes to the next model. Blank = unlimited. No JSON needed.',
             )),
-            h('textarea', {
-              className: 'bar-textarea', style: { minHeight: '80px' },
-              value: draft.modelLimitsText ?? '{}',
-              onChange: (e: any) => setDraft({ ...draft, modelLimitsText: e.target.value }),
-            }),
             h('div', { style: { maxHeight: '200px', overflow: 'auto', marginTop: '4px' } },
               h('table', { className: 'bar-table' },
                 h('thead', null, h('tr', null,
@@ -768,36 +807,8 @@
             ),
           ),
 
-          // ---- connection switcher ----
-        show('log') && h('div', { className: 'bar-card' },
-          h('h4', null, T('阿里云连接(换账号时在这里切换)', 'Aliyun connection (switch accounts here)')),
-          (state.candidates ?? []).length === 0
-            ? h('div', { className: 'bar-muted' }, T(
-              '本 profile 未发现其他阿里云兼容 provider;可直接编辑上方接口与凭据引用,或继续自动沿用当前值。',
-              'No other Aliyun-compatible provider in this profile; edit the endpoint and credential above.',
-            ))
-            : h('div', { className: 'bar-row' },
-              ...(state.candidates ?? []).map((candidate: any) => h('div', {
-                key: `${candidate.entryId}#${candidate.providerId}`,
-                className: 'bar-card',
-                style: { padding: '8px 10px', minWidth: '260px' },
-              },
-                h('div', { className: 'bar-row' },
-                  h('span', { className: 'bar-mono' }, `${candidate.entryId} → ${candidate.providerId}`),
-                  candidate.current ? h(Badge, { tone: 'ok', text: T('当前使用', 'in use') }) : null,
-                ),
-                h('div', { className: 'bar-muted bar-mono', style: { fontSize: '11px', wordBreak: 'break-all' } }, candidate.baseURL),
-                h('div', { className: 'bar-muted', style: { fontSize: '11px' } }, T('凭据: ', 'credential: ') + (candidate.apiKeyEnv ?? '—')),
-                candidate.current ? null : h('div', {
-                  className: 'bar-btn', role: 'button', style: { marginTop: '6px' },
-                  onClick: () => void mutate(
-                    () => remote.switchConnection(candidate.entryId, candidate.providerId),
-                    T('已切换连接并重新同步模型池', 'Connection switched and pool resynced'),
-                  ),
-                }, T('切到这个账号', 'Switch to this account')),
-              )),
-            ),
-        ),
+          // (0.7) removed redundant "Aliyun connection" card — account switching
+          // lives in the single searchable account dropdown on the Accounts tab.
 
         // ---- balancing & thinking ----
         show('route') && h('div', { className: 'bar-card' },
@@ -956,6 +967,7 @@
 
       function FooterCard() {
         const [line, setLine] = useState<string | null>(null)
+        const [st, setSt] = useState<any>(null)
         useEffect(() => {
           let disposed = false
           let missing = false
@@ -977,18 +989,36 @@
               }
               const state = unwrap(await remote.getState())
               if (disposed || !state) return
+              setSt(state)
               const cooling = (state.quota ?? []).filter((q: any) => !q.available).length
-              setLine(`${state.modelName} (bailian-auto) · ${T('决策模型', 'decision')} ${state.config?.decisionModel ?? '?'} · ${T('模型池', 'pool')} ${state.pool?.count ?? 0} · ${T('冷却中', 'cooling')} ${cooling}`)
+              setLine(`${state.modelName} · ${T('模型池', 'pool')} ${state.pool?.count ?? 0} · ${T('冷却中', 'cooling')} ${cooling}`)
             } catch (_e) { /* stay silent in the footer */ }
           }
           void run()
           const timer = setInterval(() => { void run() }, 30_000)
           return () => { disposed = true; clearInterval(timer) }
         }, [])
-        return h('div', { className: 'bar-footer-card' },
+        const last = (st?.history ?? [])[0]
+        const setStrategy = (v: string) => {
+          const remote = clientCtx?.get?.(`remote.${NS}`) as BarRemoteApi | undefined
+          if (!remote) return
+          void remote.updateConfig({ sortStrategy: v }).then(() => { /* next tick refreshes */ })
+        }
+        return h('div', { className: 'bar-footer-card', style: { flexWrap: 'wrap' } },
           h('style', null, CSS),
           h('span', { className: 'bar-dot', style: { background: line ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-idle-primary)' } }),
-          h('span', null, line ?? T('智能路由 Auto Router:状态载入中…', 'Auto router: loading…')))
+          h('span', null, line ?? T('智能路由 Auto Router:状态载入中…', 'Auto router: loading…')),
+          last ? h('span', { className: 'bar-muted bar-mono' }, `${T('上次', 'last')} ${last.finalModel ?? '—'} · ${last.tokens ?? 0} tok · ${last.origin === 'user' ? T('用户指定', 'user') : T('自动', 'auto')}`) : null,
+          h('select', {
+            className: 'bar-input', style: { maxWidth: '150px' }, value: st?.config?.sortStrategy ?? 'auto',
+            onChange: (e: any) => setStrategy(e.target.value),
+          },
+            h('option', { value: 'auto' }, T('智能', 'Smart')),
+            h('option', { value: 'price' }, T('价格优先', 'Price')),
+            h('option', { value: 'capability' }, T('能力优先', 'Capability')),
+            h('option', { value: 'speed' }, T('速度优先', 'Speed')),
+            h('option', { value: 'free_quota' }, T('薅免费额度', 'Free quota'))),
+        )
       }
 
       // ---- plugin entry ----------------------------------------------------------

@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Auto Router",
-    "description": "Registers the virtual model bailian-auto (display name Auto Router). One key, many models: a decision model analyzes modality and task type, then routes to the best execution model under the same account; supports Bailian / SiliconFlow / OpenRouter / Volcengine / Zhipu / Moonshot / DeepSeek and any OpenAI-compatible vendor, with quota-aware cooldowns and silent fallback; mobile falls back to data URIs when fs is unavailable.",
+    "description": "Registers the virtual model Auto Router. One key, many models: a decision model analyzes modality and task, then routes to the best execution model under the same account; vendor-neutral (SiliconFlow / OpenRouter / Volcengine / Zhipu / Moonshot / DeepSeek / Bailian and any OpenAI-compatible platform). Highlights: free-quota-first rotation, per-key token ledger with same-endpoint inheritance, /model pinning in chat, inline per-model caps, price/capability/speed/smart ordering. Quota-aware cooldowns and silent fallback. Note: hard questions go to stronger models, so balance may drain faster.",
     "detail": "docs/DETAIL.md"
   }
 }
