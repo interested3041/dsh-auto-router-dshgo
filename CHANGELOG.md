@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.1] - 2026-11-23
+
+### 修复(手机真机实测)
+
+- 修复移动端(proot)安装后**插件不激活**:`lib/adapter.js` 等处静态 import 的
+  `@deepseek-ai/dsh-llm` / `dsh-home-paths` / `schemastery` 位于宿主 `/opt/dsh/node_modules`,
+  插件目录 `/root/.dsh/plugins/<name>` 向上查找够不到,启动报 `Error [ERR_MODULE_NOT_FOUND]`,
+  并伴随 `dsh: warning: 1 entry did not activate`,模型列表不出现 Auto Router。
+  新增 `scripts/link-host-deps.sh`:一键补三条软链,幂等、缺包跳过、输出链结果;
+  补链后重启引擎即正常激活。
+
+### 文档
+
+- 安装章节新增「移动端(dshgo / proot)安装与自检」:git clone → `dsh plugin --profile web add`
+  → 补链脚本 → 停/起引擎 → 两项验证(模型列表出现 Auto Router、启动日志无 `did not activate`)。
+- 更正「零运行时依赖」表述为「运行时依赖由宿主提供」,不再宣称"不会因缺包激活失败"。
+- 补充真机验证记录(DSH App 1.0.16 / dsh 0.2.2-rc.1 / proot Ubuntu 24.04 arm64)。
+
+### 元数据
+
+- `package.json` 增补 `peerDependencies`(三个宿主包,均标 optional),
+  声明"这些包由宿主提供",避免宿主安装时误当缺失依赖或被 pnpm 强装。
+
 ## [0.4.0] - 2026-11-22
 
 ### 新增(同步桌面 0.8.0 大版本:设置持久化)

@@ -22,7 +22,8 @@
 
 - **文件系统降级**：移动端若无可写 fs，生成的图片改为内嵌 data URI 显示，不整轮报错；状态持久化失败时退化为内存态。
 - **环境兜底**：`os.homedir()` / `process.env` 在移动端不可用时自动回落，不崩溃。
-- **真机适配**：本移植先在桌面跑通测试；上真机后由 dshgo 自行适配修复剩余平台差异，修复结果回传本仓库迭代。
+- **宿主依赖软链**：proot 下插件目录解析不到宿主 `/opt/dsh/node_modules` 里的 `@deepseek-ai/*` 运行时包，安装后跑一次 `scripts/link-host-deps.sh` 即可（见下「移动端（dshgo / proot）安装与自检」）。
+- **真机适配**：本移植先在桌面跑通测试；上真机后由 dshgo 自行适配修复剩余平台差异，修复结果回传本仓库迭代。真机记录见安装章节。
 
 桌面用户请直接用 [`dsh-auto-router`](https://github.com/interested3041/dsh-auto-router)；本仓库仅供 dshgo / 移动端。
 
@@ -106,7 +107,7 @@
 | **换账号零配置** | 换个百炼账号，模型池和冷却自动重置；配置的模型在新账号不存在就自动替代并提示 |
 | **选 API 账号** | 面板顶部「当前 API 账号」下拉一键切换；可在插件里直接添加/保存/删除多厂商账号（端点 + API Key 或凭据引用），不用先去 DSH 设置里配 |
 | **面板** | 插件页能看模型池、冷却状态、最近 50 条路由记录，能改配置、刷新模型、管理并切换 API 账号 |
-| **零运行时依赖** | 不需要 `node_modules` 就能安装运行，不会因缺包激活失败 |
+| **运行时依赖由宿主提供** | 插件自身不带 `node_modules`，运行时用宿主自带的 `@deepseek-ai/dsh-llm` / `dsh-home-paths` / `schemastery`；桌面宿主天然可解析，移动端 proot 需补一次软链 |
 
 ## 安装
 
@@ -122,6 +123,35 @@ dsh plugin --profile web add /path/to/dsh-auto-router-dshgo
 ```
 
 安装后**重启** `dsh web` / Desktop（宿主插件的新模块版本需要重启加载）。
+
+### 移动端（dshgo / proot）安装与自检
+
+手机 DSH App 的引擎跑在 proot 里，宿主运行时包在 `/opt/dsh/node_modules`，
+而插件目录 `/root/.dsh/plugins/<name>` 向上查找时够不到那里。只装不补链，启动日志会是：
+
+```text
+dsh: warning: 1 entry did not activate
+auto-router-dshgo (dsh-auto-router-dshgo): failed to import: Error [ERR_MODULE_NOT_FOUND]:
+Cannot find package '@deepseek-ai/dsh-llm' imported from /root/.dsh/plugins/dsh-auto-router-dshgo/lib/adapter.js
+```
+
+完整安装（在 proot 的 bash 里执行，走 git 拉取而不是推包）：
+
+```sh
+git clone https://github.com/interested3041/dsh-auto-router-dshgo /root/.dsh/plugins/dsh-auto-router-dshgo
+dsh plugin --profile web add /root/.dsh/plugins/dsh-auto-router-dshgo
+sh /root/.dsh/plugins/dsh-auto-router-dshgo/scripts/link-host-deps.sh
+```
+
+然后在 App 里 **停引擎 → 起引擎**（或重开 App）。验证两点：
+
+- 模型选择面板出现 **智能路由 Auto Router**；
+- 新一次启动日志（`$DSH_HOME/dsh-app/diagnostics.md`）不再出现 `entry did not activate`。
+
+真机记录（2026-11-23，DSH App 1.0.16 / dsh 0.2.2-rc.1 / proot Ubuntu 24.04 arm64）：
+未补链时启动报 `ERR_MODULE_NOT_FOUND` 且 `1 entry did not activate`；补
+`dsh-llm`、`dsh-home-paths`、`schemastery` 三条软链后导入链复测 `adapter OK / index OK`，
+重启后新一次启动无告警，模型列表正常出现「智能路由 Auto Router」并可直接选中。
 
 ## 配置
 

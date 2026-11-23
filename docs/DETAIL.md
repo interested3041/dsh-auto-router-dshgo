@@ -52,6 +52,40 @@
 故面板/浮窗的每次成功编辑（排序、账号、连接中文名、限额、保存的账号等）都会镜像写入 prefs.json，
 激活时水合回 volatile 引用；prefs 校验失败自动回退忽略，不破坏激活。与 profile 配置同级信任（含密钥，仅本机），不进日志/RPC/state.json。
 
+## 移动端（proot）宿主依赖
+
+插件对宿主有三个 ESM 运行时依赖：`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-home-paths`、`@deepseek-ai/schemastery`。
+桌面宿主的 `node_modules` 与 dsh 安装目录同级，ESM 向上查找即可命中。
+
+手机 DSH App 里引擎跑在 proot（Ubuntu 24.04 / node 24），宿主包固定在 `/opt/dsh/node_modules`，
+而插件是从 `/root/.dsh/plugins/<name>` 以 link 方式进入 profile 的，
+插件文件的向上查找链只到 `/root/.dsh/plugins/node_modules`、`/root/.dsh/node_modules`，够不到 `/opt/dsh`，
+因此启动时报：
+
+```text
+dsh: warning: 1 entry did not activate
+auto-router-dshgo (dsh-auto-router-dshgo): failed to import: Error [ERR_MODULE_NOT_FOUND]:
+Cannot find package '@deepseek-ai/dsh-llm' imported from /root/.dsh/plugins/dsh-auto-router-dshgo/lib/adapter.js
+```
+
+修复方式（不改宿主动依赖树、不为插件复制副本）：
+
+```sh
+sh /root/.dsh/plugins/dsh-auto-router-dshgo/scripts/link-host-deps.sh
+# 等价手工命令：
+# mkdir -p /root/.dsh/plugins/dsh-auto-router-dshgo/node_modules/@deepseek-ai
+# ln -sfn /opt/dsh/node_modules/@deepseek-ai/dsh-llm        .../node_modules/@deepseek-ai/dsh-llm
+# ln -sfn /opt/dsh/node_modules/@deepseek-ai/dsh-home-paths .../node_modules/@deepseek-ai/dsh-home-paths
+# ln -sfn /opt/dsh/node_modules/@deepseek-ai/schemastery    .../node_modules/@deepseek-ai/schemastery
+```
+
+脚本幂等、宿主缺包时跳过；`DSH_HOST_NODE_MODULES` 可覆盖宿主包根目录（非标准布局时用）。
+补链后必须重启引擎（App 内停/起或重开 App），旧的启动进程不会热加载。
+
+真机验证（2026-11-23，DSH App 1.0.16 / dsh 0.2.2-rc.1 / proot Ubuntu 24.04 arm64 / Android 12）：
+补链前 `1 entry did not activate`；补链后 `adapter OK`、`index OK（Config / REMOTE_ENDPOINTS / apply / inject / name）`，
+重启后新一次启动无告警，模型面板出现「智能路由 Auto Router」并可选。
+
 ## 测试
 
 `npm test` 共 460 条断言（冒烟 / 分类 / 路由 / 换账号 / 多账号 / 多厂商 / 行为 / 台账 / 身份 / 策略 / 额度连接 / 自检更新 / 设置持久化）；
