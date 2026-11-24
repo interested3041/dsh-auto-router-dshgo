@@ -14,7 +14,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const lib = name => import(pathToFileURL(join(root, 'lib', name)).href)
 const { Router } = await lib('router.js')
 const { RouterStore } = await lib('store.js')
-const { analyzeRequest, effortFor } = await lib('decision.js')
+const { analyzeRequest, effortFor, reconcileReason, costCapFor } = await lib('decision.js')
 const { classifyModel } = await lib('classify.js')
 const { buildPool } = await lib('pool.js')
 
@@ -35,11 +35,50 @@ const analyse = text => analyzeRequest({
   messages: [{ role: 'user', id: 'm', content: [{ type: 'text', text }], source: { kind: 'user' } }],
 }, 4000)
 
+// Price band: a trivial slogan must not unlock a 12¥/M flagship; a deep
+// cross-file task may. The decision model only sees candidates under this cap.
+check(costCapFor(analyse('帮我想一句奶茶店开业口号')) === 3, '简单写作价格带上限为 3')
+check(costCapFor(analyse('比较 9.11 和 9.9 哪个大，并解释为什么')) === 4, '普通推理价格带上限为 4(数学比较按推理)')
+check(analyse('比较 9.11 和 9.9 哪个大，并解释为什么').heuristicTask === 'reasoning', '数学大小比较判为推理而不是代码')
+check(costCapFor(analyse('用 TypeScript 实现一个带过期时间的 LRU 缓存类，get/put 必须 O(1)')) === 4, '普通代码价格带上限为 4')
+check(costCapFor(analyse('重构这个 3000 行的 Python 脚本，拆分模块并补单元测试')) === 8, '复杂任务价格带上限为 8')
+check(costCapFor(analyse('请端到端完整实现这个分布式架构的性能优化与并发重构，覆盖故障排查、回滚、死锁和内存泄漏分析')) === 12, '深度任务才允许最高价格带')
+
 const trivial = analyse('你好')
+const contextThenHello = analyzeRequest({
+  provider: 'bailian-auto',
+  model: 'bailian-auto',
+  messages: [
+    { role: 'user', id: 'old', content: [{ type: 'text', text: '用 Spring Boot 设计一个支持 10 万并发的订单系统，给出完整实现并分析瓶颈。'.repeat(20) }], source: { kind: 'user' } },
+    { role: 'user', id: 'now', content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } },
+  ],
+}, 4000)
+check(contextThenHello.complexityLevel === 'trivial', '旧上下文不抬高当轮复杂度')
+const xmlContext = analyse('<environment_context>\n<os>Windows</os>\n<shell>pwsh</shell>\n</environment_context>\n你好')
+check(xmlContext.heuristicTask !== 'code', 'XML 上下文不被误判为代码')
+const promptThenTime = analyzeRequest({
+  provider: 'bailian-auto',
+  model: 'bailian-auto',
+  messages: [
+    { role: 'user', id: 'u', content: [{ type: 'text', text: '你好' }], source: { kind: 'user' } },
+    { role: 'user', id: 't', content: [{ type: 'text', text: 'Time sampled while preparing turn 1, step 1: 2026-11-24T20:23:20+08:00' }], source: { kind: 'time-context' } },
+  ],
+}, 4000)
+check(promptThenTime.complexityLevel === 'trivial' && promptThenTime.userText === '你好', '时间上下文不顶替用户消息')
+const correctedReason = reconcileReason(
+  '图文输入需读图；任务复杂，选全能旗舰且可读图的qwen3.8-max。',
+  'image', 'deepseek-v4.1-flash-1017', ['deepseek-v4.1-flash-1017', 'qwen3.8-max'],
+)
+check(!/qwen3\.8-max/i.test(correctedReason) && correctedReason.includes('deepseek-v4.1-flash-1017'),
+  '理由提到别的模型时改写成实际执行模型')
+const keptReason = reconcileReason('按候选排序选择 glm-5.2', 'writing', 'glm-5.2', ['glm-5.2'])
+check(keptReason === '按候选排序选择 glm-5.2', '理由与实际模型一致时原样保留')
 const simple = analyse('把这句话翻译成英文:今天天气不错')
 const normal = analyse('帮我写一段 100 字左右的产品介绍,语气专业')
 const complex = analyse('用 Spring Boot 设计一个支持 10 万并发的订单系统,给出完整实现并分析瓶颈')
 const deep = analyse('请证明这个算法的时间复杂度,并推导 n→∞ 时的渐进行为\n```js\nfunction f(n){ let s=0; for(let i=0;i<n;i++) s+=i; return s }\n```')
+const weekly = analyse('给一个小团队写一份 5 条以内的周报模板')
+const coding = analyse('用 TypeScript 实现一个带泛型的 LRU 缓存，包含单测')
 
 console.log('\n=== 复杂度判定 ===')
 for (const [label, result] of [['trivial', trivial], ['simple', simple], ['normal', normal], ['complex', complex], ['deep', deep]]) {
@@ -53,6 +92,9 @@ check(complex.complexity < deep.complexity, '复杂任务复杂度低于深度�
 check(effortFor(deep, 'auto') === 'max', `深度任务 → max (${effortFor(deep, 'auto')})`)
 check(effortFor(complex, 'auto') === 'high', `复杂任务 → high (${effortFor(complex, 'auto')})`)
 check(effortFor(trivial, 'high') === 'high', '显式档次覆盖自动策略')
+check(weekly.heuristicTask === 'writing', `周报模板判为写作 (${weekly.heuristicTask})`)
+check(coding.heuristicTask === 'code', `TypeScript 实现 LRU 判为代码 (${coding.heuristicTask})`)
+check(effortFor(weekly, 'auto', 'writing') === 'off', '简单写作 → 关闭隐藏思考(不烧输出预算)')
 
 // ---------------------------------------------------------------------------
 // Part 2: classification — media vs chat, and vision correctness.
@@ -186,7 +228,7 @@ async function run(text, extra = {}) {
 console.log('\n=== 负载均衡(相同 code 任务连续 6 次) ===')
 const served = []
 for (let index = 0; index < 6; index += 1) {
-  const result = await run('用 JavaScript 写一个快速排序,并说明复杂度')
+  const result = await run('请端到端完整实现这个分布式架构的性能优化与并发重构，覆盖故障排查、回滚、死锁和内存泄漏分析，并给出完整代码')
   served.push(result.record?.finalModel)
   if (index === 0) console.log('        usage after #1 =', JSON.stringify(store.state.usage))
   console.log(`   #${index + 1} → ${result.record?.finalModel}  (task=${result.record?.task}, src=${result.record?.decisionSource}, attempts=${(result.record?.attempts ?? []).map(a => `${a.model}${a.ok ? '✓' : '✗'}${a.code ?? ''}`).join('>')})`)
@@ -287,10 +329,20 @@ for (const prompt of ['做一个10秒汽车视频', '做一个小视频,内容�
 // ---- session stickiness: one conversation keeps one model ----
 console.log('\n=== 会话粘模型 ===')
 const sticky1 = await run('用 Python 写一个二分查找', { sessionId: 'sess-sticky' })
-const sticky2 = await run('用 Python 写一个二分查找', { sessionId: 'sess-sticky' })
+const decisionCallsAfterFirst = calls.filter(call => call.stream !== true).length
+const sticky2 = await run('帮我写一段周报总结', { sessionId: 'sess-sticky' })
 check(sticky1.record?.finalModel !== undefined, '首轮记录了最终模型')
-check(sticky1.record?.finalModel === sticky2.record?.finalModel, '同会话两轮固定同一模型')
+check(sticky1.record?.finalModel === sticky2.record?.finalModel, '同会话任务变化仍固定同一模型')
+check(calls.filter(call => call.stream !== true).length === decisionCallsAfterFirst, '同会话第二轮跳过决策模型(省 token)')
+check(store.sessionModel('sess-sticky')?.task === analyse('帮我写一段周报总结').heuristicTask, '会话绑定记录了最新任务类型')
 check(store.sessionModel('sess-sticky')?.turns === 2, '会话轮次累计到 2')
+// A title-generation helper uses a tiny completion budget; routing it through
+// the paid decision model would cost more than the title itself.
+const utilityCallsBefore = calls.filter(call => call.stream !== true).length
+const utility = await run('给这段对话起一个简短标题', { maxTokens: 64 })
+check(utility.record?.decisionSource === 'heuristic', '标题短请求直选模型(跳过决策)')
+check(calls.filter(call => call.stream !== true).length === utilityCallsBefore, '标题短请求不产生决策模型调用')
+check(!/(?:doc|ocr|tts|audio|asr|embedding|rerank|video|image)/i.test(utility.record?.finalModel ?? ''), '标题短请求避开专用端点模型')
 const otherSession = await run('用 Python 写一个二分查找', { sessionId: 'sess-other' })
 check(store.sessionModel('sess-other') !== undefined, '不同会话各自绑定')
 check(otherSession.record?.finalModel !== undefined, '新会话也记录了最终模型')
@@ -299,11 +351,11 @@ check(store.sessionModel('sess-sticky-missing') === undefined, '未绑定会话�
 // Reselection once the turn limit is reached: the pin is dropped for this turn,
 // the balanced head picks again, and the binding turns over on success.
 store.state.sessions['sess-turn'] = {
-  model: sticky1.record.finalModel, at: Date.now(), turns: 8,
+  model: sticky1.record.finalModel, at: Date.now(), turns: 50,
 }
 const turnLimitRun = await run('用 Python 写一个二分查找', { sessionId: 'sess-turn' })
 check(turnLimitRun.record?.ok === true, '达到轮次上限后仍正常选模型')
-check(store.sessionModel('sess-turn')?.turns === 9, '达到轮次上限后重选并刷新轮次计数')
+check(store.sessionModel('sess-turn')?.turns === 51, '达到轮次上限后重选并刷新轮次计数')
 
 // Requests without a sessionId never write a binding and fall back to per-request rotation.
 const sessionsBefore = Object.keys(store.state.sessions).length

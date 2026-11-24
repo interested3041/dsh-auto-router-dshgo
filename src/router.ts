@@ -4,12 +4,12 @@
  *
  * Failure policy (mirrors the requested dsh-llm-auto-style behavior):
  * - Before any chunk is emitted, retryable failures (QUOTA, RATE_LIMIT,
- *   SERVER, TRANSPORT, TIMEOUT, UNKNOWN_MODEL, EMPTY_RESPONSE,
- *   MALFORMED_RESPONSE, HTTP_429/5xx) mark the model's local quota cooldown
- *   and silently move to the next candidate.
+ *   SERVER, TRANSPORT, TIMEOUT, UNKNOWN_MODEL, INVALID_REQUEST,
+ *   EMPTY_RESPONSE, MALFORMED_RESPONSE, HTTP_429/5xx) mark the model's
+ *   local quota cooldown and silently move to the next candidate.
  * - Once any chunk has been emitted, failures propagate (no duplicate output).
- * - AUTH / credential / INVALID_REQUEST / CONTEXT_WINDOW_EXCEEDED failures are
- *   terminal for the whole request: another model would fail the same way.
+ * - AUTH / credential / CONTEXT_WINDOW_EXCEEDED failures are terminal for the
+ *   whole request: another model would fail the same way.
  */
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -17,7 +17,7 @@ import {
   DEFAULT_BASE_URL, DEFAULT_CONTEXT_WINDOW, inferVision, PROVIDER, VIRTUAL_MODEL,
 } from './catalog.js'
 import type { TaskType } from './catalog.js'
-import { effortToReasoningEffort, thinkingDispatch } from './classify.js'
+import { effortToReasoningEffort, supportsThinkingSwitch, thinkingDispatch } from './classify.js'
 import type { ThinkingDispatch, ThinkingEffort } from './classify.js'
 import { thinkingStyleFor } from './vendors.js'
 import { resolveOptions } from './config.js'
@@ -25,10 +25,11 @@ import type { Config, RouterOptions } from './config.js'
 import { discoverConnection } from './connection.js'
 import type { DiscoveredConnection } from './connection.js'
 import type { AttachmentsLike, CredentialsLike, HostContext } from './context.js'
-import { decideRoute, analyzeRequest } from './decision.js'
+import { decideRoute, analyzeRequest, effortFor, costCapFor } from './decision.js'
 import type { RouteDecision } from './decision.js'
 import { buildPool, pickDefaultModels, rankForTask } from './pool.js'
 import type { Pool } from './pool.js'
+import { priceOf } from './strategy.js'
 import { resolveKeyId, parseUserModelDirective } from './identity.js'
 import { BailianClient } from './http.js'
 import { generateImage } from './media.js'
@@ -77,6 +78,11 @@ export interface RouterSnapshot {
 /** Codes that justify trying the next candidate model. */
 const SWITCHABLE_CODES = new Set([
   'QUOTA', 'RATE_LIMIT', 'SERVER', 'TRANSPORT', 'TIMEOUT', 'UNKNOWN_MODEL',
+  // INVALID_REQUEST is often model-specific on MaaS accounts: a translation
+  // endpoint rejects tools/history, an old model rejects the thinking field.
+  // Treating it as terminal failed the whole turn without trying a healthy
+  // sibling; it is switchable before any output and parked afterwards.
+  'INVALID_REQUEST', 'UNSUPPORTED_CONTENT', 'UNSUPPORTED_OPTION',
   'EMPTY_RESPONSE', 'MALFORMED_RESPONSE', 'HTTP_429', 'HTTP_500', 'HTTP_502',
   'HTTP_503', 'HTTP_504',
 ])
@@ -338,9 +344,11 @@ export class Router {
     const client = new BailianClient({
       baseURL: snapshot.options.baseURL, apiKey, streamIdleTimeoutMs: snapshot.options.streamIdleTimeoutMs,
     })
+    const requestAnalysis = analyzeRequest(options, snapshot.options.decisionInputMaxChars)
     const userPick = this.takeUserModel(options, snapshot)
     let origin: 'auto' | 'user' = 'auto'
     let decision: RouteDecision
+    const sessionId = options.sessionId
     if (userPick !== undefined) {
       // User pinned the model: skip the decision call entirely (0 decision tokens).
       origin = 'user'
@@ -357,9 +365,55 @@ export class Router {
         decisionTokens: 0,
       }
     } else {
-      decision = await decideRoute(
-        options, snapshot.options, snapshot.pool, this.store, client, options.signal,
-      )
+      // Cache-first reuse: a fresh binding keeps its model even when the
+      // heuristic task label changes (a follow-up like "summarize" often looks
+      // like writing). Re-deciding on every task-label drift costs ~1k tokens
+      // and forces the new model to re-bill the whole prefix; only a hard
+      // capability mismatch (image input without vision) or an unavailable /
+      // overloaded model may break the binding.
+      const analysis = analyzeRequest(options, snapshot.options.decisionInputMaxChars)
+      const binding = sessionId !== undefined && snapshot.options.stickySession
+        ? this.store.sessionModel(sessionId)
+        : undefined
+      const bound = binding === undefined ? undefined : snapshot.pool.byId.get(binding.model)
+      // Cache is only worth keeping when the bound model still fits this
+      // request's price band and is strong enough for a complex code/reasoning
+      // turn. A mis-selected flagship must be downgraded even though that
+      // resets the prefix cache: the 6x price gap dwarfs the cache discount.
+      const cap = costCapFor(analysis)
+      const boundPrice = binding === undefined ? Infinity : priceOf(binding.model)
+      const underpowered = bound !== undefined
+        && (analysis.complexityLevel === 'complex' || analysis.complexityLevel === 'deep')
+        && (analysis.heuristicTask === 'code' || analysis.heuristicTask === 'reasoning')
+        && bound.traits.quality < 75
+      const reusable = binding !== undefined
+        && bound !== undefined
+        && (!analysis.hasImages || bound.traits.vision)
+        && binding.turns % snapshot.options.sessionTurnLimit !== 0
+        && !this.store.inCooldown(binding.model)
+        && !this.contextOverloaded(binding.model, options, snapshot)
+        && boundPrice <= cap
+        && !underpowered
+      if (reusable) {
+        const ranked = rankForTask(analysis.heuristicTask, snapshot.pool, snapshot.options, analysis.hasImages)
+        decision = {
+          candidates: [binding!.model, ...ranked.filter(id => id !== binding!.model)],
+          chosen: binding!.model,
+          task: analysis.heuristicTask,
+          heuristicTask: analysis.heuristicTask,
+          decisionSource: 'heuristic',
+          reasoning: '沿用本会话已选模型，保持提示缓存与工具格式',
+          decisionTokens: 0,
+          // Sticky reuse must still send an explicit thinking switch. Omitting it
+          // lets thinking-by-default models (GLM preview) burn the whole completion
+          // budget on hidden reasoning in follow-up turns.
+          effort: effortFor(analysis, snapshot.options.thinkingEffort, analysis.heuristicTask),
+        }
+      } else {
+        decision = await decideRoute(
+          options, snapshot.options, snapshot.pool, this.store, client, options.signal,
+        )
+      }
     }
 
     // Deterministic short-circuit (e.g. video intent with no video model): reply
@@ -409,9 +463,15 @@ export class Router {
       return
     }
     this.ctx.logger.info(
-      `[dsh-auto-router] task=${decision.task} modality=${decisionSourceLabel(decision)} -> ${decision.chosen}`
+      `[dsh-auto-router-dshgo] task=${decision.task} modality=${decisionSourceLabel(decision)} -> ${decision.chosen}`
       + (decision.reasoning ? ` | ${decision.reasoning}` : ''),
     )
+    // DSH also calls the model for titles, summaries and tool-loop continuations.
+    // Those are billed and must stay in the ledger, but they are not the user's
+    // decision; mark them so the floating card does not show a helper call as
+    // "上次决策".
+    const backgroundOnly = !requestAnalysis.hasUserInput
+      || (options.maxTokens !== undefined && options.maxTokens > 0 && options.maxTokens <= 128)
     const record: RouteRecord = {
       at: Date.now(),
       task: decision.task,
@@ -420,6 +480,7 @@ export class Router {
       ...(decision.decisionSource === 'model' ? { decisionModel: snapshot.options.decisionModel } : {}),
       ...(decision.reasoning ? { reasoning: decision.reasoning } : {}),
       ...(decision.decisionTokens ? { decisionTokens: decision.decisionTokens } : {}),
+      utility: decision.utility === true || backgroundOnly,
       origin,
       strategy: snapshot.options.sortStrategy,
       keyId: snapshot.keyId,
@@ -429,52 +490,68 @@ export class Router {
     // An explicit effort from the session overrides the automatic policy.
     const callerEffort = options.reasoningEffort
     const effort = callerEffort !== undefined && callerEffort !== 'auto' ? callerEffort : decision.effort
-    const attempts = decision.candidates.slice(0, snapshot.options.maxAttempts)
-    if (attempts.length === 0) attempts.push(snapshot.options.fallbackModel)
-    // Session stickiness: one conversation keeps one model, so the provider's
-    // prompt cache and tool-call formatting stay stable across turns. Every
-    // `sessionTurnLimit` turns the session may be re-selected, keeping the
-    // token balance fair for long agent loops.
-    const sessionId = options.sessionId
-    if (sessionId !== undefined && snapshot.options.stickySession) {
-      const binding = this.store.sessionModel(sessionId)
-      if (binding !== undefined
-        && binding.turns % snapshot.options.sessionTurnLimit !== 0
-        && attempts.includes(binding.model)
-        && !this.store.inCooldown(binding.model)
-        && !this.contextOverloaded(binding.model, options, snapshot)) {
-        attempts.splice(attempts.indexOf(binding.model), 1)
-        attempts.unshift(binding.model)
-      }
+    const attempts: string[] = []
+    for (const id of decision.candidates) {
+      if (attempts.length >= snapshot.options.maxAttempts) break
+      const entry = snapshot.pool.byId.get(id)
+      if (entry === undefined || !entry.traits.chat) continue
+      if (this.store.inCooldown(id)) continue
+      if (hasImageContent(options) && !this.visionOf(id, snapshot)) continue
+      if (this.contextOverloaded(id, options, snapshot)) continue
+      if (!attempts.includes(id)) attempts.push(id)
     }
+    // The configured fallback must always be the last resort. Previously a
+    // shortlist full of account-incompatible ids could consume maxAttempts and
+    // the request failed without ever trying the one model known to work.
+    const fallback = this.usableFallback(snapshot, hasImageContent(options))
+    if (fallback !== undefined && !attempts.includes(fallback)) attempts.push(fallback)
+    if (attempts.length === 0) attempts.push(snapshot.options.fallbackModel)
     let lastError: unknown
     for (const model of attempts) {
       let emitted = false
       let tokens = 0
+      let inputTokens = 0
+      let outputTokens = 0
+      let cacheReadTokens = 0
+      let cacheWriteTokens = 0
       try {
         for await (const chunk of this.attempt(options, snapshot, client, model, effort)) {
           emitted = true
           if (chunk.type === 'usage') {
+            inputTokens = chunk.usage.inputTokens ?? 0
+            outputTokens = chunk.usage.outputTokens ?? 0
+            cacheReadTokens = chunk.usage.cacheReadTokens ?? 0
+            cacheWriteTokens = chunk.usage.cacheWriteTokens ?? 0
             tokens = (chunk.usage.totalTokens ?? 0)
-              || chunk.usage.inputTokens + chunk.usage.outputTokens
-              + (chunk.usage.cacheReadTokens ?? 0) + (chunk.usage.cacheWriteTokens ?? 0)
+              || inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
           }
           yield chunk
         }
         // Attempt completed (terminal finish already yielded).
         this.store.markSuccess(model)
-        if (sessionId !== undefined && snapshot.options.stickySession) this.store.bindSession(sessionId, model)
+        if (sessionId !== undefined && snapshot.options.stickySession) {
+          this.store.bindSession(sessionId, model, decision.heuristicTask ?? decision.task)
+        }
         // Record under both buckets: ranking/balancing runs on the heuristic
         // task, while history and the panel show the decided task.
         this.store.recordUsage(decision.heuristicTask, model, tokens)
         if (decision.task !== decision.heuristicTask) this.store.recordUsage(decision.task, model, tokens)
         this.store.recordLedgerTokens(snapshot.keyId, model, tokens)
         record.tokens = tokens
+        record.inputTokens = inputTokens
+        record.outputTokens = outputTokens
+        record.cacheReadTokens = cacheReadTokens
+        record.cacheWriteTokens = cacheWriteTokens
         // Learn capability facts from real outcomes.
         if (hasImageContent(options)) this.store.confirmVision(model)
         record.attempts.push({ model, ok: true })
         record.finalModel = model
         record.ok = true
+        // Keep the visible reason truthful when earlier candidates failed and a
+        // silent fallback actually served the answer.
+        if (decision.chosen !== model) {
+          record.reasoning = `${record.reasoning ?? '按候选排序路由'}（首选 ${decision.chosen} 未成功，实际执行 ${model}）`
+        }
         this.store.recordRoute(record)
         return
       } catch (error) {
@@ -495,14 +572,22 @@ export class Router {
         }
         // UNKNOWN_MODEL / AUTH mean the account simply cannot call this id, so
         // it is parked for the long cooldown instead of being retried in loop.
-        const cooldownMs = code === 'QUOTA' || code === 'UNKNOWN_MODEL' || code === 'AUTH'
-          ? snapshot.options.quotaCooldownMs
-          : snapshot.options.rateLimitCooldownMs
+        // UNKNOWN_MODEL / INVALID_REQUEST mean this account/model pair is
+        // unusable for now. Park it for at least 6h so the same bad id is
+        // removed from the decision shortlist instead of being retried every
+        // turn; ordinary rate limits keep the configured short cooldown.
+        const hardBad = code === 'UNKNOWN_MODEL' || code === 'INVALID_REQUEST'
+          || code === 'UNSUPPORTED_CONTENT' || code === 'UNSUPPORTED_OPTION' || code === 'AUTH'
+        const cooldownMs = hardBad
+          ? Math.max(snapshot.options.quotaCooldownMs, 6 * 3_600_000)
+          : code === 'QUOTA'
+            ? snapshot.options.quotaCooldownMs
+            : snapshot.options.rateLimitCooldownMs
         this.store.markFailure(model, code, cooldownMs)
         if (sessionId !== undefined) this.store.dropSession(sessionId)
         lastError = failure
         this.ctx.logger.warn(
-          `[dsh-auto-router] ${model} failed (${code}), cooldown ${Math.round(cooldownMs / 1000)}s; trying next candidate`,
+          `[dsh-auto-router-dshgo] ${model} failed (${code}), cooldown ${Math.round(cooldownMs / 1000)}s; trying next candidate`,
         )
       }
     }
@@ -542,6 +627,14 @@ export class Router {
     })
     const tools = serializeTools(options.tools)
     const thinking = this.thinkingFor(model, effort, snapshot)
+    // Never let hidden reasoning eat the entire visible answer budget. A 2k
+    // completion with a 32k thinking budget otherwise returns one visible token.
+    if (thinking?.thinkingBudget !== undefined && options.maxTokens !== undefined && options.maxTokens > 0) {
+      thinking.thinkingBudget = Math.min(
+        thinking.thinkingBudget,
+        Math.max(256, Math.floor(options.maxTokens * 0.45)),
+      )
+    }
     const request = {
       model,
       messages,
@@ -581,6 +674,27 @@ export class Router {
   }
 
   /**
+   * Last-resort model that is callable right now. Prefer the configured
+   * fallback, then the cheapest fresh chat/vision model in the pool. This is
+   * appended after the decision shortlist so a bad decision cannot exhaust the
+   * retry budget before a known-good model is tried.
+   */
+  private usableFallback(snapshot: RouterSnapshot, needsVision: boolean): string | undefined {
+    const usable = (id: string): boolean => {
+      const entry = snapshot.pool.byId.get(id)
+      if (entry === undefined || !entry.traits.chat) return false
+      if (needsVision && !this.visionOf(id, snapshot)) return false
+      return !this.store.inCooldown(id)
+    }
+    const configured = snapshot.options.fallbackModel
+    if (configured.length > 0 && usable(configured)) return configured
+    const fresh = snapshot.pool.entries
+      .filter(entry => usable(entry.id))
+      .sort((a, b) => priceOf(a.id) - priceOf(b.id) || b.traits.quality - a.traits.quality)
+    return fresh[0]?.id ?? (configured.length > 0 ? configured : undefined)
+  }
+
+  /**
    * Whether the current message volume is approaching the bound model's
    * context window. When it is, the sticky binding is dropped so the long
    * session can re-select a roomier model instead of pinning a small-context one.
@@ -617,7 +731,14 @@ export class Router {
     if (this.store.effortUnsupported(model)) return undefined
     if (effort !== 'off' && effort !== 'low' && effort !== 'medium' && effort !== 'high' && effort !== 'max') return undefined
     const style = thinkingStyleFor(snapshot.options.vendor, snapshot.options.baseURL)
-    if (style === 'enable_thinking') return thinkingDispatch(model, effort as ThinkingEffort)
+    if (style === 'enable_thinking') {
+      // Families without a documented effort switch may still auto-think by
+      // default (DeepSeek flash on Aliyun is one). Sending an explicit `false`
+      // keeps the completion budget for the visible answer; providers that
+      // reject the field are handled by the strip-and-retry path above.
+      if (!supportsThinkingSwitch(model)) return { enableThinking: false }
+      return thinkingDispatch(model, effort as ThinkingEffort)
+    }
     if (style === 'reasoning_effort') {
       const reasoningEffort = effortToReasoningEffort(effort as ThinkingEffort)
       return reasoningEffort === undefined ? undefined : { reasoningEffort }
@@ -681,3 +802,4 @@ export function virtualContextWindow(snapshot: RouterSnapshot): number {
 export function taskRoutesOf(options: RouterOptions): Record<TaskType, readonly string[]> {
   return options.taskRoutes
 }
+

@@ -13,13 +13,14 @@
  * head — routing never blocks the user's request.
  */
 import type { GenerateOptions, RequestMessage } from '@deepseek-ai/dsh-llm'
-import { inferVision, PROVIDER } from './catalog.js'
+import { inferVision, PROVIDER, catalogEntry } from './catalog.js'
 import { orderCandidates } from './strategy.js'
 import { resolveKeyId } from './identity.js'
 import type { TaskType } from './catalog.js'
 import type { RouterOptions } from './config.js'
 import type { BailianClient } from './http.js'
 import { chooseBalanced, describeTraits, rankForTask } from './pool.js'
+import { priceOf } from './strategy.js'
 import type { Pool } from './pool.js'
 import type { RouterStore } from './store.js'
 
@@ -29,6 +30,8 @@ export interface RequestAnalysis {
   hasImages: boolean
   /** Concatenated recent user text, truncated for the decision prompt. */
   userText: string
+  /** True when the request carries an actual user-authored text block. */
+  hasUserInput: boolean
   /** Rough Chinese-character ratio of the recent user text. */
   zhRatio: number
   /** Code-fence / code-symbol density heuristic. */
@@ -70,12 +73,19 @@ export interface RouteDecision {
   notice?: { kind: 'video-unsupported'; text: string }
   /** Tokens the decision call itself consumed (0 when no decision ran). */
   decisionTokens?: number
+  /** Background title/summary helper: counted in the ledger, hidden from the main decision card. */
+  utility?: boolean
 }
 
-const CODE_PATTERN = /```|<\/?[a-z]+[ >]|\b(?:def|class|function|const|let|var|import|export|return|if|for|while|switch|catch)\b|[{};()]\s*$/
+const CODE_PATTERN = /```|<!doctype\s+html|<(?:script|style|html|body|div|span|template|section|article|table|form|input|button)[ >]|\b(?:def|class|function|const|let|var|import|export|return|if|for|while|switch|catch)\b|\b(?:typescript|javascript|python|java|golang|rust|c\+\+|sql)\b|代码|编程|实现(?:一个|一下)?(?:函数|接口|类|算法|缓存|组件|模块|脚本|程序)|泛型|单测|单元测试|数据结构|重构|迁移方案|并发|死锁|内存泄漏|[{};()]\s*$/i
 const TRANSLATION_PATTERN = /翻译|译成|translate|translation|英译中|中译英|本地化|localize/i
-const WRITING_PATTERN = /写作|写一篇|润色|改写|扩写|续写|文案|标题|摘要|总结|write (?:a|an)|rewrite|polish|copywrit|blog|essay|故事|小说|诗/i
-const REASONING_PATTERN = /推理|证明|推导|数学|逻辑|复杂度|渐进|分析(?:一下)?原因|为什么|求解|方程|reason|prove|derive|complexity|math|logic|puzzle|step by step/i
+const WRITING_PATTERN = /写作|写一篇|润色|改写|扩写|续写|文案|标题|摘要|总结|周报|月报|日报|模板|公文|演讲稿|通知|邮件|口号|标语|取名|起名|write (?:a|an)|rewrite|polish|copywrit|blog|essay|故事|小说|诗/i
+const REASONING_PATTERN = /推理|证明|推导|数学|逻辑|复杂度|渐进|分析(?:一下)?原因|为什么|求解|方程|哪个(?:更)?(?:大|小|快|慢|重|轻)|\d+(?:\.\d+)?\s*(?:和|与|vs\.?|比)\s*\d+(?:\.\d+)?|reason|prove|derive|complexity|math|logic|puzzle|step by step/i
+/** Hidden title/summary helpers use a tiny completion and never need a paid routing call. */
+const UTILITY_TITLE = /(?:起|生成|写|拟|取|建议).{0,8}(?:标题|title)|(?:标题|title).{0,8}(?:生成|建议|命名)/i
+const TINY_COMPLETION_TOKENS = 128
+/** Specialty endpoints that are cheap but wrong for chat/title routing. */
+const NON_CHAT_UTILITY = /(?:doc|ocr|tts|audio|asr|embedding|rerank|video|image)/i
 const ZH_CHAR = /[\u4e00-\u9fff]/
 /** Explicit "make me a picture" intent, but not "describe this image". */
 const IMAGE_INTENT = /(?:画一张|画一幅|画个|生成(?:一张|一幅|一个)?图片|生成(?:一张)?图|做一张图|配图|出图|画图|draw (?:me )?(?:a|an)? ?\w+|generate (?:an? )?image|create (?:an? )?image|make (?:an? )?(?:picture|image))/i
@@ -96,22 +106,31 @@ const IMAGE_READING = /(?:这张图|这幅图|图里|图片里|看图|识别(?:�
 /** Words that signal a trivial request regardless of length. */
 const TRIVIAL_HINT = /^(?:你好|hi|hello|在吗|谢谢|thanks|ok|好的|嗯)[!！。.~\s]*$/i
 /** Words that signal a demanding request. */
-const DEEP_HINT = /(?:架构|设计方案|重构|性能优化|并发|分布式|证明|推导|从头|端到端|完整实现|review|refactor|architecture|benchmark|analy(?:ze|sis) )/i
+const DEEP_HINT = /(?:架构|设计方案|重构|性能优化|并发|分布式|证明|推导|从头|端到端|完整实现|迁移|故障排查|回滚|死锁|内存泄漏|review|refactor|architecture|benchmark|analy(?:ze|sis) )/i
 
 /** Extract routing signals from one assembled request. */
 export function analyzeRequest(options: GenerateOptions, maxChars: number): RequestAnalysis {
   let hasImages = false
-  const userTexts: string[] = []
+  let hasUserInput = false
+  let latestUserText = ''
   for (const message of options.messages as readonly RequestMessage[]) {
     if (message.role !== 'user' && message.role !== 'tool') continue
+    const source = (message as any).source?.kind as string | undefined
+    const texts: string[] = []
     for (const block of message.content ?? []) {
       if (block.type === 'image') hasImages = true
-      else if (block.type === 'text' && message.role === 'user') userTexts.push(block.text)
+      else if (block.type === 'text' && message.role === 'user') texts.push(block.text)
+    }
+    // DSH injects workspace rules, runtime context, skill catalogs and a time
+    // stamp as role="user" messages. Only source="user" is the human's own turn.
+    // Treating those context blocks as the prompt made a one-line "hello" look
+    // like a complex/code task and triggered a paid decision call on every turn.
+    if (texts.length > 0 && (source === undefined || source === 'user')) {
+      latestUserText = texts.join('\n')
+      hasUserInput = true
     }
   }
-  // The most recent user input weighs most; keep the tail within the budget.
-  const joined = userTexts.slice(-6).join('\n')
-  const userText = joined.length > maxChars ? joined.slice(-maxChars) : joined
+  const userText = latestUserText.length > maxChars ? latestUserText.slice(-maxChars) : latestUserText
   const zhChars = userText.match(new RegExp(ZH_CHAR.source, 'g'))?.length ?? 0
   const zhRatio = userText.length === 0 ? 0 : zhChars / userText.length
   const sample = userText.slice(-4000)
@@ -151,7 +170,7 @@ export function analyzeRequest(options: GenerateOptions, maxChars: number): Requ
   complexity = Math.max(0, Math.min(100, complexity))
   const complexityLevel: RequestAnalysis['complexityLevel'] = complexity < 10
     ? 'trivial'
-    : complexity < 25 ? 'simple' : complexity < 40 ? 'normal' : complexity < 65 ? 'complex' : 'deep'
+    : complexity < 25 ? 'simple' : complexity < 40 ? 'normal' : complexity < 75 ? 'complex' : 'deep'
 
   // Media intent: ask to produce something, without asking to read an image.
   // Video is checked first, but only when no exclusion noun is present: a
@@ -167,6 +186,7 @@ export function analyzeRequest(options: GenerateOptions, maxChars: number): Requ
   return {
     hasImages,
     userText,
+    hasUserInput,
     zhRatio,
     codeScore,
     translationLikely,
@@ -185,15 +205,39 @@ export function analyzeRequest(options: GenerateOptions, maxChars: number): Requ
 
 /** Reasoning effort for one request under the configured policy. */
 export function effortFor(
-  analysis: RequestAnalysis, policy: RouterOptions['thinkingEffort'],
+  analysis: RequestAnalysis, policy: RouterOptions['thinkingEffort'], task?: TaskType,
 ): 'off' | 'low' | 'medium' | 'high' | 'max' {
   if (policy !== 'auto') return policy
+  // Chat-shaped work (copywriting, translation, small talk, image explanation)
+  // rarely benefits from a long hidden chain of thought: thinking there mostly
+  // burns the output budget and can truncate the visible answer. Reserve deeper
+  // thinking for code/reasoning, and for genuinely complex chat tasks.
+  const chatLike = task === 'writing' || task === 'translation' || task === 'general' || task === 'image'
   switch (analysis.complexityLevel) {
     case 'trivial': return 'off'
-    case 'simple': return 'low'
-    case 'normal': return 'medium'
-    case 'complex': return 'high'
-    case 'deep': return 'max'
+    case 'simple': return chatLike ? 'off' : 'low'
+    case 'normal': return chatLike ? 'low' : 'medium'
+    case 'complex': return chatLike ? 'medium' : 'high'
+    case 'deep': return chatLike ? 'high' : 'max'
+  }
+}
+
+/**
+ * Price ceiling (estimated ¥/1M blended) for this request.
+ *
+ * The router should not spend a 12¥/M flagship on "which is bigger, 9.11 or
+ * 9.9" or a one-line slogan. Only a genuinely deep request unlocks the top
+ * tier; ordinary code and reasoning stay in the cheap/mid band so a session
+ * can keep one model and preserve the provider prefix cache.
+ */
+export function costCapFor(analysis: RequestAnalysis): number {
+  if (analysis.mediaIntent === 'image' || analysis.hasImages) return 8
+  switch (analysis.complexityLevel) {
+    case 'trivial': return 3
+    case 'simple': return analysis.heuristicTask === 'code' || analysis.heuristicTask === 'reasoning' ? 4 : 3
+    case 'normal': return 4
+    case 'complex': return 8
+    case 'deep': return 12
   }
 }
 
@@ -218,10 +262,16 @@ export function buildCandidates(
   // request still answers (the panel shows the exhaustion).
   const withinLimit = ranked.filter(id => store.withinLimit(id, options.modelLimits))
   if (withinLimit.length > 0) ranked = withinLimit
+  // Cost guard. The decision model sees only models inside this band, so it
+  // cannot "freely choose" a 12¥/M flagship for a trivial request. Explicit
+  // taskRoutes are user intent and stay even when above the band.
+  const cap = costCapFor(analysis)
+  const pinned = new Set(options.taskRoutes[task] ?? [])
+  const affordable = ranked.filter(id => pinned.has(id) || priceOf(id) <= cap)
+  if (affordable.length > 0) ranked = affordable
   const fresh = ranked.filter(id => !store.inCooldown(id))
   const cooled = ranked.filter(id => store.inCooldown(id))
   const ordered = [...fresh, ...cooled]
-  const window = Math.max(1, Math.min(options.maxCandidatesForDecision, ordered.length))
   // Rotation happens across the whole ranking: the least-loaded model among the
   // near-equal head takes the lead, so both the decision shortlist and the
   // fallback chain start from it.
@@ -249,7 +299,13 @@ export function buildCandidates(
     }
     final = result.order
   }
-  return { ranked: final, forDecision: final.slice(0, window) }
+  // The decision model must never see a cooling-down model: picking it wastes
+  // the decision call and burns an attempt. Only when every model is cooling
+  // do we show the cooled tail, so the request still has a chance.
+  const freshFinal = final.filter(id => !store.inCooldown(id))
+  const decisionPool = freshFinal.length > 0 ? freshFinal : final
+  const decisionWindow = Math.max(1, Math.min(options.maxCandidatesForDecision, decisionPool.length))
+  return { ranked: final, forDecision: decisionPool.slice(0, decisionWindow) }
 }
 
 /** One decision-prompt build result. */
@@ -277,28 +333,31 @@ export function buildDecisionPrompt(
 ): DecisionPrompt {
   const describe = (id: string): string => {
     const entry = pool.byId.get(id)
-    if (entry === undefined) return `- ${id}`
+    const price = `约¥${priceOf(id)}/M`
+    if (entry === undefined) return `- ${id}（${price}）`
     const note = describeTraits(entry, analysis.heuristicTask)
-    return note.length > 0 ? `- ${id}(${note})` : `- ${id}`
+    return note.length > 0 ? `- ${id}（${note}；${price}）` : `- ${id}（${price}）`
   }
   const system = [
-    '你是"智能路由 Auto Router"的决策模型。你的唯一任务:分析用户输入,从候选执行模型中选出最合适的一个。',
-    '判定维度:输入模态(文本/图片/代码)与任务类型(写作、推理、翻译、代码、图片分析、通用对话)。',
-    '路由规则:',
+    '你是"智能路由 Auto Router"的决策模型。你的唯一任务:从给定的候选执行模型中选出最合适的一个。',
+    '候选列表已经是本账号当前可用、未冷却、未超限、未连续失败的模型;不得编造或选择列表之外的 model id。',
+    '选择规则:',
     '1. 含图片输入时,只能选择标注"可读图片"的模型。',
-    '2. 中文写作/润色优先"写作强"的模型(如 glm、qwen-max/plus 系列、kimi)。',
-    '3. 复杂逻辑/代码优先"代码强"或"推理强"的模型(如 deepseek-v4-pro、qwen-max、glm、kimi)。',
-    '4. 翻译任务优先"翻译专用"模型,其次是旗舰通用模型。',
-    '5. 简单对话/信息提取优先"快/便宜"的模型,复杂任务优先"能力旗舰"。',
-    '6. 候选已按任务匹配度与冷却状态排序;同等合适时优先靠前者。',
+    '2. 先看任务难度与价格:简单对话、信息提取、单句写作、短翻译优先"快/便宜"的模型,不要为了用旗舰而用旗舰。',
+    '3. 普通单文件代码、示例、单测优先便宜且够用的快模型;只有跨文件重构、复杂算法、线上故障排查或多轮工具链才选能力旗舰。',
+    '4. 翻译任务优先"翻译专用"模型,没有专用模型时选便宜且"写作强"的通用模型。',
+    '5. 中文写作/润色优先"写作强"的模型,但价格不得超过本轮预算。',
+    '6. 候选已按任务匹配度、可用额度与价格带排序;同等合适时优先靠前者。',
+    '7. reasoning 只写为什么选它,必须与 selected_model 一致,不要提到别的模型。',
     '只输出一个 JSON 对象,不要输出任何其他文本、解释或代码块标记,格式:',
-    '{"selected_model":"<候选列表中的模型id>","task_type":"writing|translation|code|reasoning|image|general","reasoning":"<不超过50字的中文路由原因>"}',
+    '{"selected_model":"<候选列表中的模型id>","reasoning":"<不超过50字的中文路由原因>"}',
   ].join('\n')
   const user = [
     `[输入模态] ${analysis.hasImages ? '图片+文本(必须选择可读图片的模型)' : '文本'}`,
     `[启发式信号] 任务猜测=${TASK_LABELS[analysis.heuristicTask]}; 代码密度=${analysis.codeScore.toFixed(2)}; 中文字符占比=${analysis.zhRatio.toFixed(2)}`,
     `[复杂度] ${analysis.complexity}/100 (${analysis.complexityLevel})`,
-    `[候选执行模型] (按任务匹配度与可用额度排序, 共 ${candidates.length} 个)`,
+    `[价格预算] 约 ¥${costCapFor(analysis)}/百万 token 以内(候选已过滤)`,
+    `[候选执行模型] (共 ${candidates.length} 个,均已满足可用与预算条件)`,
     ...candidates.map(describe),
     `[决策模型] ${options.decisionModel}`,
     '[最近用户输入摘录]',
@@ -333,6 +392,31 @@ export function parseDecision(content: string): DecisionAnswer | undefined {
   } catch (_invalidJson) {
     return undefined
   }
+}
+
+/** Chinese task labels used in user-facing route reasons. */
+const TASK_CN: Record<TaskType, string> = {
+  image: '图片分析', writing: '写作', translation: '翻译', code: '代码', reasoning: '推理', general: '通用',
+}
+
+/**
+ * Keep the displayed reason consistent with the model that will actually run.
+ * Decision models occasionally narrate a different candidate than the id they
+ * return; showing that rationale verbatim makes the panel look wrong. When the
+ * text names another candidate, replace it with a deterministic, accurate
+ * reason instead of preserving the contradiction.
+ */
+export function reconcileReason(reason: string | undefined, task: TaskType, chosen: string, candidates: readonly string[]): string {
+  if (reason === undefined || reason.length === 0) return `${TASK_CN[task]}任务；按能力、额度与候选排序选择 ${chosen}`
+  const lowered = reason.toLowerCase()
+  const other = candidates.find(candidate => {
+    if (candidate === chosen) return false
+    if (lowered.includes(candidate.toLowerCase())) return true
+    const name = catalogEntry(candidate)?.name
+    return name !== undefined && lowered.includes(name.toLowerCase())
+  })
+  if (other === undefined) return reason
+  return `${TASK_CN[task]}任务；按能力、额度与候选排序选择 ${chosen}`
 }
 
 /**
@@ -407,15 +491,48 @@ export async function decideRoute(
         task: 'general',
         heuristicTask,
         decisionSource: 'media',
-        effort: effortFor(analysis, routerOptions.thinkingEffort),
+        effort: effortFor(analysis, routerOptions.thinkingEffort, 'image'),
         media: { kind: 'image', model: picked?.id ?? '', prompt: analysis.mediaPrompt ?? analysis.userText },
         reasoning: `图片生成请求 → ${picked?.id ?? '(no image model)'}`,
       }
     }
   }
 
+  // Hidden title/summary helpers run with a tiny completion budget; paying a
+  // decision model for an 8-token title would cost more than the title itself.
+  const utilityCall = !analysis.hasImages && analysis.codeScore < 0.25
+    && ((options.maxTokens !== undefined && options.maxTokens > 0 && options.maxTokens <= TINY_COMPLETION_TOKENS)
+      || UTILITY_TITLE.test(analysis.userText))
+  const simpleChat = utilityCall
+    || analysis.complexityLevel === 'trivial'
+    || ((heuristicTask === 'writing' || heuristicTask === 'translation' || heuristicTask === 'general')
+      && analysis.complexityLevel === 'simple')
+  if (simpleChat) {
+    // A simple request should not burn flagship money: keep the task ranking,
+    // but drop models above the request's own price band from the lead.
+    const cap = costCapFor(analysis)
+    const affordable = heuristic.ranked.filter(id => priceOf(id) <= cap && !NON_CHAT_UTILITY.test(id))
+    const chosen = affordable[0] ?? heuristic.ranked[0] ?? routerOptions.fallbackModel
+    const candidates = [
+      chosen,
+      ...heuristic.ranked.filter(id => id !== chosen),
+    ]
+    return {
+      candidates,
+      chosen,
+      task: heuristicTask,
+      heuristicTask,
+      decisionSource: 'heuristic',
+      effort: effortFor(analysis, routerOptions.thinkingEffort, heuristicTask),
+      reasoning: utilityCall
+        ? '标题/短工具请求:直选性价比模型,省去决策模型调用'
+        : '简单对话/写作:按任务规则直选性价比模型,省去决策模型调用',
+      ...(utilityCall ? { utility: true } : {}),
+    }
+  }
+
   if (!routerOptions.enableDecision || heuristic.forDecision.length === 0) {
-    return { ...heuristicChoice(), effort: effortFor(analysis, routerOptions.thinkingEffort) }
+    return { ...heuristicChoice(), effort: effortFor(analysis, routerOptions.thinkingEffort, heuristicTask) }
   }
 
   const prompt = buildDecisionPrompt(analysis, heuristic.forDecision, pool, routerOptions)
@@ -440,8 +557,10 @@ export async function decideRoute(
     const answer = parseDecision(typeof content === 'string' ? content : '')
     const selected = answer?.selectedModel
     if (selected !== undefined && heuristic.forDecision.includes(selected)) {
-      const task = (['writing', 'translation', 'code', 'reasoning', 'image', 'general'] as const)
-        .find(value => value === answer?.taskType) ?? heuristicTask
+      // The decision model picks the model; it does not get to rewrite the
+      // task classification. A math comparison called "code" in a model reply
+      // used to trigger flagship routing even though the heuristic was correct.
+      const task = heuristicTask
       // Re-rank: the chosen model first; the rest keeps the heuristic order so
       // the fallback chain still prefers task-fitting models.
       const candidates = [selected, ...heuristic.ranked.filter(id => id !== selected)]
@@ -451,15 +570,15 @@ export async function decideRoute(
         task,
         heuristicTask,
         decisionSource: 'model',
-        effort: effortFor(analysis, routerOptions.thinkingEffort),
+        effort: effortFor(analysis, routerOptions.thinkingEffort, task),
         decisionTokens,
-        ...(answer?.reasoning ? { reasoning: answer.reasoning } : {}),
+        reasoning: reconcileReason(answer?.reasoning, task, selected, candidates),
       }
     }
     // Decision answer unusable (bad JSON / id outside the shortlist): heuristic.
     return {
       ...heuristicChoice(),
-      effort: effortFor(analysis, routerOptions.thinkingEffort),
+      effort: effortFor(analysis, routerOptions.thinkingEffort, heuristicTask),
       decisionTokens,
       ...(answer?.reasoning ? { reasoning: `决策输出无效: ${answer.reasoning}` } : {}),
     }
@@ -478,7 +597,7 @@ export async function decideRoute(
       task: heuristicTask,
       heuristicTask,
       decisionSource: 'fallback',
-      effort: effortFor(analysis, routerOptions.thinkingEffort),
+      effort: effortFor(analysis, routerOptions.thinkingEffort, heuristicTask),
       reasoning: `决策模型不可用(${String((error as Error)?.message ?? error).slice(0, 120)}),使用回退模型 ${chosen}`,
     }
   } finally {

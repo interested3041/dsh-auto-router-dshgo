@@ -20,6 +20,7 @@ import { BailianClient } from './http.js'
 import { apiKeyConfigured, resolveApiKey } from './router.js'
 import type { Router } from './router.js'
 import type { RouterStore } from './store.js'
+import { historyForKey } from './store.js'
 
 /** One saved account as the panel displays it — the raw key is NEVER returned. */
 export interface AccountView {
@@ -101,6 +102,16 @@ export interface HistoryView {
   keyId: string | null
   /** Answer tokens consumed by the final model. */
   tokens: number
+  /** Non-cached input tokens. */
+  inputTokens: number
+  /** Output tokens. */
+  outputTokens: number
+  /** Input tokens served from the provider prompt cache. */
+  cacheReadTokens: number
+  /** Input tokens written to the prompt cache. */
+  cacheWriteTokens: number
+  /** Background title/summary helper: ledger-only, not a user decision. */
+  utility: boolean
 }
 
 /** Editable configuration fields (plain values). */
@@ -219,11 +230,11 @@ export interface SelfCheckResult {
 
 /** Fields the panel may edit, with light type guards before persistence. */
 const STRING_FIELDS = ['baseURL', 'apiKeyEnv', 'decisionModel', 'fallbackModel'] as const
-const BOOL_FIELDS = ['enableDecision', 'autoSyncPool', 'includeSpecialEndpoints', 'enableMediaRouting'] as const
+const BOOL_FIELDS = ['enableDecision', 'autoSyncPool', 'includeSpecialEndpoints', 'enableMediaRouting', 'stickySession'] as const
 const NUMBER_FIELDS = [
   'decisionTimeoutMs', 'decisionInputMaxChars', 'maxAttempts', 'quotaCooldownMinutes',
   'rateLimitCooldownSeconds', 'streamIdleTimeoutMs', 'poolSyncIntervalHours', 'maxCandidatesForDecision',
-  'balanceWindow', 'balanceBand', 'balanceWindowHours',
+  'balanceWindow', 'balanceBand', 'balanceWindowHours', 'sessionTurnLimit',
 ] as const
 
 export interface ConfigPatch {
@@ -242,6 +253,8 @@ export interface ConfigPatch {
   poolSyncIntervalHours?: number
   maxCandidatesForDecision?: number
   includeSpecialEndpoints?: boolean
+  stickySession?: boolean
+  sessionTurnLimit?: number
   excludeModels?: string[]
   taskRoutes?: Partial<Record<TaskType, string[]>>
   models?: ConfigModel[]
@@ -249,6 +262,8 @@ export interface ConfigPatch {
   activeAccountId?: string
   /** Per-model usage limits; an empty object clears every limit. */
   modelLimits?: Record<string, { maxCalls?: number; maxTokens?: number }>
+  /** Custom display names for discovered connections; an empty object clears all overrides. */
+  connectionNames?: Record<string, string>
   sortStrategy?: 'auto' | 'price' | 'capability' | 'speed' | 'free_quota'
   bucketTokens?: number
   bucketTolerance?: number
@@ -338,6 +353,20 @@ function sanitizePatch(patch: unknown): Record<string, unknown> {
       }
     }
     out.modelLimits = cleaned
+  }
+  if (input.connectionNames !== undefined) {
+    const names = input.connectionNames
+    if (typeof names !== 'object' || names === null || Array.isArray(names)) {
+      throw new Error('connectionNames must be an object mapping entryId|providerId -> display name')
+    }
+    const cleaned: Record<string, string> = {}
+    for (const [key, value] of Object.entries(names as Record<string, unknown>)) {
+      if (typeof value !== 'string') throw new Error(`connectionNames.${key} must be a string`)
+      const name = value.trim()
+      if (name.length > 0) cleaned[key] = name
+    }
+    // An empty object is meaningful: it clears every custom display name.
+    out.connectionNames = cleaned
   }
   if (input.excludeModels !== undefined) {
     if (!Array.isArray(input.excludeModels) || input.excludeModels.some(item => typeof item !== 'string')) {
@@ -446,7 +475,10 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
       lastOkAt: state.lastOkAt ?? null,
     })
   }
-  const history: HistoryView[] = [...store.state.history].reverse().map(record => ({
+  // History is per-key: switching accounts must not show another key's last
+  // decision (its model may not even exist on the new account).
+  const activeKeyId = resolveKeyId({ activeAccountId: options.activeAccountId, baseURL: options.baseURL, apiKeyEnv: options.apiKeyEnv })
+  const history: HistoryView[] = [...historyForKey(store.state.history, activeKeyId)].reverse().map(record => ({
     at: record.at,
     task: record.task,
     modality: record.modality,
@@ -461,6 +493,15 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     strategy: record.strategy ?? 'auto',
     keyId: record.keyId ?? null,
     tokens: record.tokens ?? 0,
+    inputTokens: record.inputTokens ?? 0,
+    outputTokens: record.outputTokens ?? 0,
+    cacheReadTokens: record.cacheReadTokens ?? 0,
+    cacheWriteTokens: record.cacheWriteTokens ?? 0,
+    utility: typeof record.utility === 'boolean'
+      ? record.utility
+      // Legacy 0.9.1 records predate the flag: their title/sticky helper rows
+      // are the ones that used to overwrite the main decision card.
+      : /标题\/短工具请求|沿用本会话已选模型/.test(record.reasoning ?? ''),
   }))
   const taskRoutes: Record<string, string[]> = {}
   for (const task of TASK_TYPES) taskRoutes[task] = [...(options.taskRoutes[task] ?? [])]
@@ -473,8 +514,20 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     current: candidate.baseURL === options.baseURL,
   }))
   // Masked account views: the raw key never leaves the host process.
-  const activeKeyId = resolveKeyId({ activeAccountId: options.activeAccountId, baseURL: options.baseURL, apiKeyEnv: options.apiKeyEnv })
-  const activeLedger = store.ledgerOf(activeKeyId, { baseURL: options.baseURL })
+  const activeAccount = options.activeAccountId === undefined
+    ? undefined
+    : options.accounts.find(account => account.id === options.activeAccountId)
+  const activeConnection = candidates.find(candidate => candidate.current)
+  const ledgerLabel = activeAccount?.name
+    ?? (snapshot.adopted !== undefined ? (snapshot.adopted.name ?? snapshot.adopted.providerId) : undefined)
+    ?? activeConnection?.name
+    ?? options.apiKeyEnv
+    ?? activeKeyId
+  const activeLedger = store.ledgerOf(activeKeyId, {
+    label: ledgerLabel,
+    ...(activeAccount?.providerId === undefined ? {} : { providerId: activeAccount.providerId }),
+    baseURL: options.baseURL,
+  })
   const accounts: AccountView[] = options.accounts.map(account => ({
     id: account.id,
     name: account.name,
@@ -740,11 +793,11 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
       try {
         const resolved = await resolveApiKey(ctx, snapshot.options.apiKeyRefs, snapshot.options.apiKeyDirect)
         apiKey = resolved.key
-        items.push({ name: 'API Key', ok: true, detail: `凭据已解析 (${resolved.ref})` })
+        items.push({ name: 'API Key', ok: true, detail: '凭据已解析(本机凭据服务 / 启动环境)' })
       } catch (error) {
         items.push({
           name: 'API Key', ok: false, detail: String((error as Error)?.message ?? error).slice(0, 200),
-          hint: '在 DSH 凭据服务或启动环境设置 BAILIAN_API_KEY / DASHSCOPE_API_KEY / ALIYUN_API_KEY,或确保 profile 里有指向阿里云的接入',
+          hint: '在 DSH 凭据服务或启动环境中配置当前账号的 Key,或确认账号的凭据引用有效',
         })
       }
 
@@ -836,3 +889,4 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
     },
   }
 }
+

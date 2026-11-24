@@ -172,9 +172,12 @@ const streamOk = text => (body, res) => {
     },
     'glm-5.2': streamOk('你好'),
   }, calls)
-  const { router, store } = await makeRouter()
+  const { router, store } = await makeRouter({ taskRoutes: {
+    image: ['glm-5.2'], writing: ['glm-5.2'], translation: ['glm-5.2'],
+    code: ['glm-5.2'], reasoning: ['glm-5.2'], general: ['glm-5.2'],
+  } })
   const snapshot = router.capture()
-  const chunks = await collect(router.stream(userRequest('帮我写一篇散文'), snapshot))
+  const chunks = await collect(router.stream(userRequest('用 TypeScript 实现一个带泛型的 LRU 缓存，包含边界检查、并发安全和两个单测用例'), snapshot))
   const types = chunks.map(c => c.type)
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
   assert(calls.some(c => c.model === 'deepseek-v4.1-flash' && c.stream !== true), 'A: decision model called one-shot')
@@ -208,8 +211,9 @@ const streamOk = text => (body, res) => {
     },
     '*': streamOk('切换成功'),
   }, calls)
-  const { router, store } = await makeRouter()
-  const chunks = await collect(router.stream(userRequest('润色这段文字'), router.capture()))
+  const { router, store } = await makeRouter({ taskRoutes: { writing: ['glm-5.2'] } })
+  store.state.pendingUserModel = 'glm-5.2'
+  const chunks = await collect(router.stream(userRequest('写一篇 800 字的品牌文案，包含标题、三个卖点和结尾行动号召'), router.capture()))
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
   assert(text === '切换成功!', 'B: next candidate served the request')
   assert(!calls.some(c => c.stream !== true && c.model !== 'deepseek-v4.1-flash' && c.model !== 'deepseek-v4.1-flash-1017'), 'B: no extra decision call on switch')
@@ -263,7 +267,8 @@ const streamOk = text => (body, res) => {
     },
     'qwen3.8-max': streamOk('不该出现'),
   }, calls)
-  const { router, store } = await makeRouter()
+  const { router, store } = await makeRouter({ taskRoutes: { writing: ['glm-5.2'] } })
+  store.state.pendingUserModel = 'glm-5.2'
   let thrown
   const chunks = []
   try {
@@ -288,7 +293,7 @@ const streamOk = text => (body, res) => {
   }, calls)
   const { router, store } = await makeRouter({ decisionTimeoutMs: 1200 })
   const started = Date.now()
-  const chunks = await collect(router.stream(userRequest('随便聊聊'), router.capture()))
+  const chunks = await collect(router.stream(userRequest('请分析这个分布式系统的性能瓶颈，推导并给出端到端完整实现方案'), router.capture()))
   const elapsed = Date.now() - started
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
   assert(text === '回退输出!', 'D: fallback model served the request')
@@ -323,6 +328,28 @@ const streamOk = text => (body, res) => {
   // The serialized wire message must carry the image placeholder (no attachment service in test).
   const imageMessage = execution.messages.at(-1)
   assert(Array.isArray(imageMessage.content) && imageMessage.content.some(p => p.type === 'text' && /image attachment img-1/.test(p.text)), 'E: image projected to deterministic placeholder text')
+}
+
+// ---- Scenario E2: INVALID_REQUEST is model-specific → fallback still runs ----
+{
+  const calls = []
+  handler = behaviorHandler({
+    'glm-5.2': (body, res) => {
+      if (!body.stream) return
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { code: 'InvalidParameter', message: 'model does not support tools/history' } }))
+    },
+    'deepseek-v4.1-flash': streamOk('坏模型后仍成功'),
+  }, calls)
+  const { router, store } = await makeRouter()
+  store.state.pendingUserModel = 'glm-5.2'
+  const chunks = await collect(router.stream(userRequest('写一段普通总结'), router.capture()))
+  const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
+  assert(text === '坏模型后仍成功!', 'E2: known-good fallback served after INVALID_REQUEST')
+  const record = store.state.history.at(-1)
+  assert(record?.attempts[0]?.code === 'INVALID_REQUEST' && record.attempts.length >= 2, 'E2: invalid model and fallback both recorded')
+  const q = store.state.quota['glm-5.2']
+  assert(q?.cooldownUntil > Date.now() + 5 * 3_600_000, 'E2: invalid model parked for at least 6h')
 }
 
 // ---- Scenario F: pool sync ------------------------------------------------------
@@ -520,7 +547,7 @@ const qwenOk = (body, res) => {
   const execHigh = calls.find(call => call.stream === true)
   assert(execHigh?.model === 'qwen3.8-max', 'K: qwen3.8-max 收到执行请求')
   assert(execHigh.enable_thinking === true, 'K: 请求体含 enable_thinking:true')
-  assert(execHigh.thinking_budget === 32768, 'K: 请求体含 thinking_budget 上限(high=32768)')
+  assert(execHigh.thinking_budget === 8192, 'K: 请求体含 thinking_budget 上限(high=8192)')
   assert(!('reasoning_effort' in execHigh), 'K: 请求体不含 reasoning_effort')
   assert(chunksHigh.filter(c => c.type === 'text-delta').map(c => c.text).join('') === '思考完成', 'K: 回答正常')
 }
@@ -532,7 +559,7 @@ const qwenOk = (body, res) => {
   await collect(router.stream({ ...userRequest('推导'), reasoningEffort: 'max' }, router.capture()))
   const exec = calls.find(call => call.stream === true)
   assert(!('reasoning_effort' in exec) || exec.reasoning_effort !== 'max', 'K: max 不产生 reasoning_effort:"max"')
-  assert(exec.enable_thinking === true && exec.thinking_budget === 65536, 'K: max 产生 enable_thinking + 65536 预算')
+  assert(exec.enable_thinking === true && exec.thinking_budget === 16384, 'K: max 产生 enable_thinking + 16384 预算')
 }
 {
   // off → enable_thinking:false for a switch family.
@@ -599,8 +626,8 @@ const qwenOk = (body, res) => {
   const { router } = await makeRouter({ enableDecision: false, balanceStrategy: 'quality', taskRoutes: proutes })
   await collect(router.stream({ ...userRequest('重构这个 function 并分析时间复杂度'), reasoningEffort: 'high' }, router.capture()))
   const exec = calls.find(call => call.stream === true)
-  assert(exec.enable_thinking === undefined && exec.thinking_budget === undefined && !('reasoning_effort' in exec),
-    'M: 无思考族(deepseek-v4-pro)在任何档位下都不收思考参数')
+  assert(exec.enable_thinking === false && exec.thinking_budget === undefined && !('reasoning_effort' in exec),
+    'M: 无思考族(deepseek-v4-pro)显式关闭思考,避免默认自动思考吃满输出')
 }
 
 // ---- Scenario N: per-model usage limit stops an exhausted model --------------
@@ -667,3 +694,4 @@ for (const check of checks) {
 }
 console.log(`\n${checks.length - failed}/${checks.length} checks passed`)
 process.exit(failed > 0 ? 1 : 0)
+

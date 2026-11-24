@@ -176,18 +176,19 @@ check(offQwen !== undefined && offQwen.enableThinking === false && offQwen.think
 check(thinkingDispatch('deepseek-v4-pro', 'off') === undefined, 'off 对无思考族不产生思考参数')
 check(thinkingDispatch('qwen3.8-max', undefined) === undefined, '无档位不产生思考参数')
 
-// low/medium → enable_thinking:true with the provider's default budget.
+// low/medium → enable_thinking:true with a small explicit budget; omitting the
+// budget lets some providers spend the whole completion on hidden reasoning.
 const lowQwen = thinkingDispatch('qwen3.8-max', 'low')
-check(lowQwen !== undefined && lowQwen.enableThinking === true && lowQwen.thinkingBudget === undefined,
-  'low 产生 enable_thinking:true(默认预算)')
-check(thinkingDispatch('glm-5.2', 'medium')?.enableThinking === true, 'medium 产生 enable_thinking:true')
+check(lowQwen !== undefined && lowQwen.enableThinking === true && lowQwen.thinkingBudget === 1024,
+  'low 产生 enable_thinking:true + 1024 预算')
+check(thinkingDispatch('glm-5.2', 'medium')?.thinkingBudget === 2048, 'medium 产生 2048 预算')
 
 // high/max → a budget cap, never a reasoning_effort:"max".
 const highQwen = thinkingDispatch('qwen3.8-max', 'high')
 const maxQwen = thinkingDispatch('qwen3.8-max', 'max')
 check(highQwen?.enableThinking === true && typeof highQwen?.thinkingBudget === 'number' && highQwen.thinkingBudget > 0,
   'high 产生 enable_thinking:true + thinking_budget')
-check(maxQwen?.enableThinking === true && maxQwen?.thinkingBudget === 65536, 'max 产生 65536 预算上限')
+check(maxQwen?.enableThinking === true && maxQwen?.thinkingBudget === 16384, 'max 产生 16384 预算上限')
 check(Object.prototype.hasOwnProperty.call(maxQwen ?? {}, 'reasoningEffort') === false,
   'max 不产生 reasoning_effort 字段')
 

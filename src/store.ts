@@ -57,6 +57,24 @@ export interface RouteRecord {
   keyId?: string
   /** Execution tokens (input+output) charged for this request. */
   tokens?: number
+  /** Non-cached input tokens billed for this request. */
+  inputTokens?: number
+  /** Output tokens billed for this request. */
+  outputTokens?: number
+  /** Input tokens served from the provider's prompt cache. */
+  cacheReadTokens?: number
+  /** Input tokens written into the prompt cache (Anthropic-style providers). */
+  cacheWriteTokens?: number
+  /** Background title/summary helper: ledger-only, not a user decision. */
+  utility?: boolean
+}
+
+/** History rows belonging to one key. Records without a keyId are never shown
+ * under a concrete key: after switching accounts, an old key's decision must
+ * not masquerade as the new key's last decision. */
+export function historyForKey(records: readonly RouteRecord[], keyId: string): RouteRecord[] {
+  if (keyId === '') return [...records]
+  return records.filter(record => record.keyId === keyId)
 }
 
 /** Per-model consumption inside one key's ledger. */
@@ -103,6 +121,8 @@ export interface SessionBinding {
   at: number
   /** Turns served in this session (periodic reselection keeps balance fair). */
   turns: number
+  /** Heuristic task type of the last turn; a topic change re-decides. */
+  task?: string
 }
 
 /** Complete persisted state. */
@@ -244,6 +264,7 @@ function sanitize(raw: unknown): RouterState {
         model: entry.model,
         at: Number.isFinite(entry.at) ? entry.at : 0,
         turns: Number.isFinite(entry.turns) ? entry.turns : 0,
+        ...(typeof entry.task === 'string' && entry.task.length > 0 ? { task: entry.task } : {}),
       }
     }
   }
@@ -444,11 +465,12 @@ export class RouterStore {
   }
 
   /** Pin (or refresh) the model of one session and count the served turn. */
-  bindSession(sessionId: string, model: string, now = Date.now()): SessionBinding {
+  bindSession(sessionId: string, model: string, task?: string, now = Date.now()): SessionBinding {
     const binding = this.state.sessions[sessionId] ?? { model, at: now, turns: 0 }
     binding.model = model
     binding.at = now
     binding.turns += 1
+    if (task !== undefined) binding.task = task
     this.state.sessions[sessionId] = binding
     const ids = Object.keys(this.state.sessions)
     if (ids.length > MAX_SESSIONS) {
@@ -524,7 +546,15 @@ export class RouterStore {
   /** Ledger of one key, created on demand (empty = brand-new key). */
   ledgerOf(keyId: string, meta?: { label?: string; providerId?: string; baseURL?: string }): KeyLedger {
     const existing = this.state.ledgers[keyId]
-    if (existing !== undefined) return existing
+    if (existing !== undefined) {
+      // Display names can change after the ledger was first created (account
+      // rename, provider switch); keep the ledger's label human-readable.
+      if (meta?.label !== undefined && existing.label !== meta.label) {
+        existing.label = meta.label
+        this.scheduleWrite()
+      }
+      return existing
+    }
     const ledger: KeyLedger = {
       keyId,
       label: meta?.label ?? keyId,
@@ -657,3 +687,4 @@ export class RouterStore {
     await this.flush()
   }
 }
+

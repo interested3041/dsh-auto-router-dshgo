@@ -251,15 +251,33 @@
         const show = (name: string) => tab === name
         const [upd, setUpd] = useState<any>(null)
         const [updBusy, setUpdBusy] = useState(false)
+        const [updMsg, setUpdMsg] = useState<string | null>(null)
         const checkUpdate = useCallback(async () => {
           if (!remote) return
           setUpdBusy(true)
-          try { setUpd(unwrap(await remote.checkUpdate())) } catch (_e) { /* offline: ignore */ }
+          try {
+            const info = unwrap(await remote.checkUpdate())
+            setUpd(info)
+            if (info?.error) setUpdMsg(String(info.error))
+          } catch (_e) { /* offline: keep the previous state */ }
           if (alive.current) setUpdBusy(false)
         }, [remote])
         useEffect(() => { void checkUpdate() }, [checkUpdate])
         const alive = useRef(true)
         useEffect(() => () => { alive.current = false }, [])
+        const applyUpdateNow = useCallback(async () => {
+          if (!remote || !upd?.latest) return
+          setUpdBusy(true)
+          setUpdMsg(null)
+          try {
+            const result = unwrap(await remote.applyUpdate(upd.latest))
+            setUpdMsg(String(result?.message ?? `v${upd.latest} 更新已启动`))
+          } catch (error) {
+            setUpdMsg(`更新失败:${String((error as Error)?.message ?? error)}`)
+          } finally {
+            if (alive.current) setUpdBusy(false)
+          }
+        }, [remote, upd?.latest])
 
         const applyState = useCallback((next: any) => {
           if (!alive.current || !next) return
@@ -518,11 +536,13 @@
             h('div', { className: 'bar-row' },
               h('div', { className: 'bar-btn', role: 'button', onClick: () => void checkUpdate() }, updBusy ? T('检查中…', 'Checking…') : T('检查更新', 'Check for updates')),
               upd?.hasUpdate ? h('div', {
-                className: 'bar-btn bar-btn-primary', role: 'button',
-                onClick: () => void mutate(() => remote.applyUpdate(upd.latest), T('更新已启动,宿主将自动重启(停→部署→启动→校验)', 'Updater started; host will restart (stop→deploy→start→verify)')),
+                className: 'bar-btn bar-btn-primary', role: 'button', style: updBusy ? { opacity: .6 } : undefined,
+                onClick: () => void applyUpdateNow(),
               }, T('更新到 v', 'Update to v') + upd.latest) : null,
-              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('更新会先停 DSH 再覆盖并重启,不会在运行中覆盖文件。', 'Update stops DSH first, then redeploy & restart; never overwrites live files.')),
-            ),
+              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T(
+                '原地更新:自动停宿主→替换 lib→重启,保留 node_modules、账号和配置,不需要重装。',
+                'In-place update: stops host, swaps lib, restarts; keeps node_modules, accounts and config; no reinstall.'))),
+            updMsg ? h('div', { className: updMsg.startsWith('更新失败') ? 'bar-error' : 'bar-ok', style: { fontSize: '11px', marginTop: '6px', whiteSpace: 'pre-wrap' } }, updMsg) : null,
           ),
 
           // ---- overview ----
@@ -962,8 +982,8 @@
               )),
           ),
           h('div', { className: 'bar-muted' }, T(
-            '均衡: 同一任务在排名前 N 的同类模型之间按近期 token 消耗轮转,避免每次都用同一个旗舰。思考档位: auto 会按输入长度、代码密度、推理词汇、已执行工具步数估算复杂度并下发对应档位(trivial→off, simple→low, normal→medium, complex→high, deep→max)。',
-            'Balancing rotates among the top-N task candidates by recent token usage. Auto effort estimates complexity from length, code density, reasoning vocabulary and tool steps.',
+            '均衡: 同一任务在排名前 N 的同类模型之间按近期 token 消耗轮转,避免每次都用同一个旗舰。决策模型只从「当前可用、未冷却、未超限、未连续失败」且落在本轮价格带内的候选里选:简单 3 / 普通 4 / 复杂 8 / 深度 12(¥/百万 token)。思考档位: auto 会按输入长度、代码密度、推理词汇、已执行工具步数估算复杂度并下发对应档位(trivial→off, simple→low, normal→medium, complex→high, deep→max)。',
+            'Balancing rotates among the top-N task candidates by recent token usage. The decision model only sees callable, non-cooling, within-limit candidates inside the request price band (3/4/8/12 ¥ per 1M tokens). Auto effort follows the estimated complexity.',
           )),
           h('div', { className: 'bar-row' },
             h('label', { className: 'bar-check' },
@@ -1049,6 +1069,7 @@
                     h('span', { className: 'bar-mono' }, r.finalModel ?? '—'),
                     h('span', { className: 'bar-muted' }, `${fmtTime(r.at)} · ${r.task} · ${r.modality} · ${decisionSourceLabel(r.decisionSource)}`
                       + (r.decisionTokens ? ` · 决策 ${r.decisionTokens} tok` : '')
+                      + ` · 输入 ${(r.inputTokens ?? 0) + (r.cacheReadTokens ?? 0)} / 缓存 ${(r.cacheReadTokens ?? 0)} tok`
                       + (r.tokens ? ` · 回答 ${r.tokens} tok` : '')
                       + ` · ${r.origin === 'user' ? T('用户指定', 'user-pinned') : T('自动', 'auto')} · ${r.strategy ?? 'auto'}`),
                   ),
@@ -1192,8 +1213,9 @@
         }
         const cooling = (st?.quota ?? []).filter((q: any) => !q.available).length
         const history: any[] = st?.history ?? []
-        const last = history[0]
-        const recent = history.slice(0, 8).reverse()
+        const userHistory = history.filter((row: any) => row?.utility !== true)
+        const last = userHistory[0] ?? history[0]
+        const recent = userHistory.slice(0, 8).reverse()
         const okCount = recent.filter(row => row.ok).length
         const maxTok = Math.max(1, ...recent.map(row => Number(row.tokens) || 0))
         const fmtClock = (ms: number): string => {
@@ -1257,7 +1279,11 @@
               h('div', { style: { alignSelf: 'center', fontSize: '13px' } }, '→'),
               node('执行模型', last.finalModel ?? '—', true)),
             h('div', { className: 'bar-muted', style: { fontSize: '10px', marginTop: '4px' } }, [
-              `回答 ${last.tokens ?? 0} tok`,
+              `输入 ${(last.inputTokens ?? 0) + (last.cacheReadTokens ?? 0)} tok`,
+              `输出 ${last.outputTokens ?? last.tokens ?? 0} tok`,
+              ((last.inputTokens ?? 0) + (last.cacheReadTokens ?? 0)) > 0
+                ? `缓存 ${Math.round((last.cacheReadTokens ?? 0) / ((last.inputTokens ?? 0) + (last.cacheReadTokens ?? 0)) * 100)}%`
+                : '缓存 0%',
               last.decisionTokens ? `决策 ${last.decisionTokens} tok` : '',
               (last.attempts?.length ?? 0) > 1 ? `试了 ${last.attempts.length} 个模型` : '',
             ].filter(Boolean).join(' · ')),

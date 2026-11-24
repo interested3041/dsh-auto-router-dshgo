@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-router-dshgo",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DeepSeek Harness 多厂商智能路由插件:注册虚拟模型「智能路由 Auto Router」,单 API key 下由决策模型按任务自动路由到最合适的执行模型; vendor-neutral,支持硅基流动/OpenRouter/火山方舟/智谱/Moonshot/DeepSeek/百炼等单key多模型平台;薅免费额度优先、每-key独立台账、/model指定模型、行内限额、四种排序、额度感知冷却与静默回退。Vendor-neutral decision-model router: one API key, many models, free-quota rotation, per-key ledger, /model pinning, inline caps, quota-aware cooldown and silent fallback.",
   "type": "module",
   "main": "lib/index.js",
