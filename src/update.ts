@@ -11,7 +11,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 
@@ -58,6 +58,9 @@ export interface UpdateResult {
   message: string
   /** The host must restart once the detached script swaps lib/. */
   restarting?: boolean
+  /** Diagnostic/test only: archive extracted and script written, host untouched. */
+  staged?: boolean
+  script?: string
 }
 
 /** Node fetch with a hard timeout and an actionable error. */
@@ -118,9 +121,15 @@ async function extractTarGzArchive(tarGz: Buffer, destination: string): Promise<
     const size = sizeRaw.length === 0 ? 0 : parseInt(sizeRaw, 8) || 0
     const type = String.fromCharCode(header[156] || 48)
     offset += 512
+    if (type === 'g' || type === 'x' || type === 'L' || type === 'K') {
+      // PAX/GNU metadata headers describe the next entry; skip their payload.
+      offset += Math.ceil(size / 512) * 512
+      continue
+    }
     if (full.length === 0) continue
     const clean = resolve(destination, full)
-    if (!clean.startsWith(resolve(destination) + '/') && clean !== resolve(destination)) {
+    const rel = relative(resolve(destination), clean)
+    if (rel.startsWith('..') || isAbsolute(rel)) {
       throw new Error(`tar 包含越界路径:${full}`)
     }
     if (type === '5' || full.endsWith('/')) {
@@ -229,6 +238,9 @@ export async function applyUpdate(tag: string, repo: string = UPDATE_REPO): Prom
   ].join('\n')
   await writeFile(shell, script, 'utf8')
   await chmod(shell, 0o755)
+  if (process.env.DSH_AUTOROUTER_UPDATE_STAGE_ONLY === '1') {
+    return { started: false, staged: true, script: shell, message: `v${normalized} 已下载、解压并校验;更新脚本已生成(测试模式未停宿主)。` }
+  }
   try {
     const child = spawn('sh', [shell], {
       detached: true,
