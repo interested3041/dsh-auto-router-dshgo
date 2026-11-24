@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Auto Router",
-    "description": "Registers the virtual model Auto Router. One key, many models: a decision model analyzes modality and task, then routes to the best execution model under the same account; vendor-neutral (SiliconFlow / OpenRouter / Volcengine / Zhipu / Moonshot / DeepSeek / Bailian and any OpenAI-compatible platform). Highlights: free-quota-first rotation, per-key token ledger with same-endpoint inheritance, /model pinning in chat, inline per-model caps, price/capability/speed/smart ordering. Quota-aware cooldowns and silent fallback. Note: hard questions go to stronger models, so balance may drain faster.",
+    "description": "Registers the virtual model Auto Router. One key, many models: a decision model analyzes modality and task, then routes to the best execution model under the same account; vendor-neutral (SiliconFlow / OpenRouter / Volcengine / Zhipu / Moonshot / DeepSeek / Bailian and any OpenAI-compatible platform). Highlights: free-quota-first rotation, per-key token ledger, /model pinning in chat, inline per-model caps, price/capability/speed/smart ordering. Quota-aware cooldowns and silent fallback. Note: hard questions go to stronger models, so balance may drain faster.",
     "detail": "docs/DETAIL.md"
   }
 }

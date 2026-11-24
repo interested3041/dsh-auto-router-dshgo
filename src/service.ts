@@ -177,7 +177,7 @@ export interface RouterStateView {
   quota: QuotaView[]
   history: HistoryView[]
   /** Connection reused from an existing profile provider, when adopted. */
-  adopted: { entryId: string; providerId: string; baseURL: string; apiKeyEnv: string | null } | null
+  adopted: { entryId: string; providerId: string; name: string | null; baseURL: string; apiKeyEnv: string | null } | null
   /** Aliyun-compatible connections found in this profile. */
   candidates: { entryId: string; providerId: string; baseURL: string; apiKeyEnv: string | null; current: boolean }[]
   /** Configured models this account does not serve, and the substitutes in use. */
@@ -190,10 +190,7 @@ export interface RouterStateView {
   keyLedger: { keyId: string; label: string; totalTokens: number; cycle: number }
   /** Sum of totalTokens over all key ledgers (float shows 累计 when it differs). */
   ledgersTotal: number
-  /** Same-endpoint older key whose ledger could be inherited, when current is empty. */
-  inheritSuggestion: { fromKeyId: string; label: string; totalTokens: number } | null
 }
-
 /** Result of the pool-sync operation. */
 export interface RefreshResult {
   ok: boolean
@@ -470,6 +467,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
   const candidates = listConnections(ctx).map(candidate => ({
     entryId: candidate.entryId,
     providerId: candidate.providerId,
+    name: candidate.name ?? null,
     baseURL: candidate.baseURL,
     apiKeyEnv: candidate.apiKeyEnv ?? null,
     current: candidate.baseURL === options.baseURL,
@@ -477,7 +475,6 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
   // Masked account views: the raw key never leaves the host process.
   const activeKeyId = resolveKeyId({ activeAccountId: options.activeAccountId, baseURL: options.baseURL, apiKeyEnv: options.apiKeyEnv })
   const activeLedger = store.ledgerOf(activeKeyId, { baseURL: options.baseURL })
-  const inheritFrom = activeLedger.totalTokens === 0 ? (store.sameEndpointLedger(activeKeyId, options.baseURL) ?? null) : null
   const accounts: AccountView[] = options.accounts.map(account => ({
     id: account.id,
     name: account.name,
@@ -573,6 +570,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     adopted: snapshot.adopted === undefined ? null : {
       entryId: snapshot.adopted.entryId,
       providerId: snapshot.adopted.providerId,
+      name: snapshot.adopted.name ?? null,
       baseURL: snapshot.adopted.baseURL,
       apiKeyEnv: snapshot.adopted.apiKeyEnv ?? null,
     },
@@ -580,7 +578,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     derived: snapshot.derived ?? null,
     connections: dedupeConnections(candidates.map(candidate => ({
       id: candidate.entryId,
-      name: candidate.providerId ?? '',
+      name: candidate.name ?? candidate.providerId ?? '',
       providerId: candidate.providerId ?? '',
       baseURL: candidate.baseURL,
       credentialRef: candidate.apiKeyEnv ?? undefined,
@@ -591,7 +589,6 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     })),
     keyLedger: { keyId: activeKeyId, label: activeLedger.label, totalTokens: activeLedger.totalTokens, cycle: activeLedger.cycle },
     ledgersTotal: Object.values(store.state.ledgers).reduce((sum, ledger) => sum + ledger.totalTokens, 0),
-    inheritSuggestion: inheritFrom == null ? null : { fromKeyId: inheritFrom.keyId, label: inheritFrom.label, totalTokens: inheritFrom.totalTokens },
   }
 }
 
@@ -614,8 +611,6 @@ export interface BailianRouterService {
   refreshPool(): Promise<RefreshResult>
   /** One-shot override: next request uses this model, then auto-routing resumes. */
   pinUserModel(model: string): Promise<RouterStateView>
-  /** Merge an older same-endpoint key's ledger into the active key. */
-  inheritKeyLedger(fromKeyId: string, toKeyId: string): Promise<RouterStateView>
   /** Check GitHub Releases for a newer version (current vs latest). */
   checkUpdate(): Promise<UpdateInfo>
   /** Launch the detached self-updater (stop -> deploy -> start -> verify). */
@@ -832,13 +827,6 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
       store.scheduleWrite()
       return stateView(ctx, router, store)
     },
-    async inheritKeyLedger(fromKeyId: string, toKeyId: string) {
-      await store.ready
-      if (typeof fromKeyId !== 'string' || typeof toKeyId !== 'string') throw new Error('key ids must be strings')
-      const ok = store.inheritLedger(fromKeyId, toKeyId)
-      if (!ok) throw new Error('未找到源台账(可能已被重置)')
-      return stateView(ctx, router, store)
-    },
     async checkUpdate() {
       return checkLatest()
     },
@@ -848,4 +836,3 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
     },
   }
 }
-

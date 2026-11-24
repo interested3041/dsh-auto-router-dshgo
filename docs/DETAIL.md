@@ -30,7 +30,7 @@
 
 ## 配置面板入口
 
-- **插件页 → 本插件 → 配置区**（客户端面板挂在 `plugins.bundle.config` 插槽，key 为包名 `dsh-auto-router`）：
+- **插件页 → 本插件 → 配置区**（客户端面板挂在 `plugins.bundle.config` 插槽，key 为包名 `dsh-auto-router-dshgo`）：
   决策模型、回退模型、超时、最大尝试、冷却、厂商预设、思考档位、均衡窗口、各任务候选、自定义模型池、账号管理、额度上限、自检按钮。
 - **设置 → 模型** 底部另有一张状态小卡片（`settings.models.footer` 插槽）。
 
@@ -88,5 +88,5 @@ sh /root/.dsh/plugins/dsh-auto-router-dshgo/scripts/link-host-deps.sh
 
 ## 测试
 
-`npm test` 共 460 条断言（冒烟 / 分类 / 路由 / 换账号 / 多账号 / 多厂商 / 行为 / 台账 / 身份 / 策略 / 额度连接 / 自检更新 / 设置持久化）；
+`npm test` 共 452 条断言（冒烟 / 分类 / 路由 / 换账号 / 多账号 / 多厂商 / 行为 / 台账 / 身份 / 策略 / 额度连接 / 自检更新 / 设置持久化）；
 `npm run test:live` 用本机真实凭据跑完整链路（会计费，按需）。

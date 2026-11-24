@@ -80,8 +80,6 @@ export interface KeyLedger {
   totalTokens: number
   /** Bucket rotation counter (free-quota mode). */
   cycle: number
-  /** Set when this ledger was cloned from another key on the same endpoint. */
-  inheritedFrom?: string
 }
 
 /** Recent consumption of one model inside one task category. */
@@ -274,7 +272,6 @@ function sanitize(raw: unknown): RouterState {
         models,
         totalTokens: Number.isFinite(ledger.totalTokens) ? ledger.totalTokens : 0,
         cycle: Number.isFinite(ledger.cycle) ? ledger.cycle : 0,
-        ...(typeof ledger.inheritedFrom === 'string' ? { inheritedFrom: ledger.inheritedFrom } : {}),
       }
     }
   }
@@ -544,36 +541,6 @@ export class RouterStore {
     return ledger
   }
 
-  /** Whether a ledger already exists for this key (used for inherit prompts). */
-  hasLedger(keyId: string): boolean {
-    return this.state.ledgers[keyId] !== undefined
-  }
-
-  /** Most recent ledger sharing the same endpoint but a different key. */
-  sameEndpointLedger(keyId: string, baseURL: string): KeyLedger | undefined {
-    const normalized = baseURL.replace(/\/+$/, '')
-    const candidates = this.state.keyHistory
-      .map(id => this.state.ledgers[id])
-      .filter((ledger): ledger is KeyLedger => ledger !== undefined && ledger.keyId !== keyId)
-      .filter(ledger => ledger.baseURL.replace(/\/+$/, '') === normalized)
-    return candidates[0]
-  }
-
-  /** Clone another key's ledger onto this key (user approved same-URL reuse). */
-  inheritLedger(fromKeyId: string, toKeyId: string, meta?: { label?: string; providerId?: string; baseURL?: string }): KeyLedger {
-    const source = this.state.ledgers[fromKeyId]
-    if (source === undefined) throw new Error('source ledger not found')
-    const target = this.ledgerOf(toKeyId, meta)
-    target.models = JSON.parse(JSON.stringify(source.models)) as Record<string, KeyLedgerModel>
-    target.totalTokens = source.totalTokens
-    target.cycle = source.cycle
-    target.inheritedFrom = fromKeyId
-    target.updatedAt = Date.now()
-    this.touchKey(toKeyId)
-    this.scheduleWrite()
-    return target
-  }
-
   /** Charge execution tokens to one key's ledger and its current bucket. */
   recordLedgerTokens(keyId: string, model: string, tokens: number, now = Date.now()): void {
     const ledger = this.ledgerOf(keyId)
@@ -690,4 +657,3 @@ export class RouterStore {
     await this.flush()
   }
 }
-

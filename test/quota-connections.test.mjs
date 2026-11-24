@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 const lib = name => pathToFileURL(join(process.cwd(), 'lib', name)).href
 const { resolveOptions } = await import(lib('config.js'))
 const { resolveKeyId, dedupeConnections, connectionLabel, accountKeyId, discoveredKeyId } = await import(lib('identity.js'))
+const { listConnections } = await import(lib('connection.js'))
 const { RouterStore } = await import(lib('store.js'))
 const { priceOf, orderCandidates } = await import(lib('strategy.js'))
 
@@ -43,6 +44,27 @@ ok('dedupe keeps distinct endpoints', () => {
 ok('connectionLabel prefers user name', () => assert.equal(connectionLabel(real), '阿里云'))
 ok('connectionLabel falls back providerId', () => assert.equal(connectionLabel({ id: 'x', name: '', providerId: 'p', baseURL: 'b', kind: 'discovered' }), 'p'))
 
+ok('listConnections carries provider displayName (never credential ref)', () => {
+  const ctx = { get: key => key === 'configEditor' ? {
+    configuration: () => [{
+      entry: { options: { id: 'cc-switch-packy-code' } },
+      inherited: { providers: { 'cc-switch-packy-code': { displayName: 'PackyCode', baseURL: 'https://api.siliconflow.cn/v1', apiKeyEnv: 'CC_SWITCH_DSH_CC_SWITCH_PACKY_CODE' } } },
+      override: {},
+    }],
+  } : undefined }
+  const list = listConnections(ctx)
+  assert.equal(list[0].name, 'PackyCode')
+  assert.equal(list[0].providerId, 'cc-switch-packy-code')
+  assert.equal(list[0].apiKeyEnv, 'CC_SWITCH_DSH_CC_SWITCH_PACKY_CODE')
+  assert.notEqual(connectionLabel({ ...list[0], kind: 'discovered' }), list[0].apiKeyEnv)
+})
+ok('flat provider row reads displayName too', () => {
+  const ctx = { get: key => key === 'configEditor' ? {
+    configuration: () => [{ entry: { options: { id: 'pack' } }, inherited: { displayName: 'PackyCode', baseURL: 'https://api.siliconflow.cn/v1' }, override: {} }],
+  } : undefined }
+  assert.equal(listConnections(ctx)[0].name, 'PackyCode')
+})
+
 ok('accountKeyId acct prefix', () => assert.ok(accountKeyId('a1').startsWith('acct:')))
 ok('discoveredKeyId disc prefix', () => assert.ok(discoveredKeyId('https://x', 'REF', 'hint').startsWith('disc:')))
 ok('resolveKeyId active account wins', () => assert.equal(resolveKeyId({ activeAccountId: 'a1', baseURL: 'https://x', apiKeyEnv: 'E' }), accountKeyId('a1')))
@@ -62,22 +84,6 @@ ok('resetBucket(model) clears only that model', () => {
   store.resetBucket('k1', 'm')
   assert.equal(store.ledgerOf('k1').models.m.bucketTokens, 0)
   assert.equal(store.ledgerOf('k1').models.n.bucketTokens, 10)
-})
-ok('sameEndpointLedger finds older same-URL key', () => {
-  store.ledgerOf('old', { baseURL: 'https://same', label: '旧' })
-  store.recordLedgerTokens('old', 'm', 500)
-  store.ledgerOf('new', { baseURL: 'https://same', label: '新' })
-  const found = store.sameEndpointLedger('new', 'https://same')
-  assert.equal(found.keyId, 'old')
-})
-ok('inheritLedger clones totals and marks inheritedFrom', () => {
-  const merged = store.inheritLedger('old', 'new')
-  assert.ok(merged)
-  assert.equal(store.ledgerOf('new').totalTokens, 500)
-  assert.equal(store.ledgerOf('new').inheritedFrom, 'old')
-})
-ok('inheritLedger missing source throws', () => {
-  assert.throws(() => store.inheritLedger('nope', 'new'))
 })
 ok('resetBucket()全清 bumps cycle', () => {
   const before = store.ledgerOf('k1').cycle

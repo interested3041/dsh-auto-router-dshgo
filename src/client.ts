@@ -25,7 +25,6 @@
     selfCheck(): Promise<any>
     clearHistory(): Promise<any>
     pinUserModel(model: string): Promise<any>
-    inheritKeyLedger(fromKeyId: string, toKeyId: string): Promise<any>
     checkUpdate(): Promise<any>
     applyUpdate(tag: string): Promise<any>
     switchConnection(entryId: string, providerId: string): Promise<any>
@@ -101,7 +100,6 @@
           { ...endpoint('resetModelTotals'), parameters: [param('model', 'ModelId', anyValue, true)], result: codec('RouterState', asObject) },
           { ...endpoint('clearHistory'), parameters: [], result: codec('RouterState', asObject) },
           { ...endpoint('pinUserModel'), parameters: [param('model', 'ModelId', anyValue)], result: codec('RouterState', asObject) },
-          { ...endpoint('inheritKeyLedger'), parameters: [param('fromKeyId', 'String', anyValue), param('toKeyId', 'String', anyValue)], result: codec('RouterState', asObject) },
           { ...endpoint('checkUpdate'), parameters: [], result: codec('UpdateInfo', asObject) },
           { ...endpoint('applyUpdate'), parameters: [param('tag', 'String', anyValue)], result: codec('UpdateResult', asObject) },
           { ...endpoint('selfCheck'), parameters: [], result: codec('SelfCheckResult', asObject) },
@@ -150,6 +148,38 @@
 
       // ---- small helpers -------------------------------------------------------
       const fmtTime = (ms: number | null): string => (ms ? new Date(ms).toLocaleString() : '—')
+      /** Connection label: "显示名: providerId" — never the credential reference. */
+      const connKeyOf = (c: any): string => `${c.id}|${c.providerId}`
+      const connLabelOf = (c: any, names?: Record<string, string>): string => {
+        const custom = names?.[connKeyOf(c)]
+        const name = String(custom ?? c?.name ?? c?.providerId ?? c?.id ?? '').trim()
+        const pid = String(c?.providerId ?? '').trim()
+        if (name === '' && pid === '') return String(c?.id ?? '')
+        return pid !== '' && name !== pid ? `${name}: ${pid}` : (name || pid)
+      }
+      /** Which connection the router actually points at, even after an explicit switch. */
+      const selectedConnOf = (st: any, cfg: any): any | undefined => {
+        if (st?.adopted) return st.adopted
+        const base = String(cfg?.baseURL ?? '').replace(/\/+$/, '')
+        const baseMatch = (st?.connections ?? []).filter((c: any) => String(c?.baseURL ?? '').replace(/\/+$/, '') === base)
+        if (baseMatch.length === 0) return undefined
+        // Same endpoint can host several keys: prefer the one whose credential
+        // matches the live config, otherwise fall back to the first.
+        const key = String(cfg?.apiKeyEnv ?? '')
+        const keyed = baseMatch.find((c: any) => key !== '' && String(c?.apiKeyEnv ?? '') === key)
+        const match = keyed ?? baseMatch[0]
+        return { ...match, entryId: match.id }
+      }
+      // Panel and chat float are two views of one router. A tiny in-memory bus
+      // makes a switch in either place land in the other immediately, instead of
+      // each component keeping its own sticky selection.
+      let sharedState: any = null
+      const stateSubs = new Set<(next: any) => void>()
+      const publishState = (next: any): void => {
+        if (!next) return
+        sharedState = next
+        for (const fn of Array.from(stateSubs)) { try { fn(next) } catch (_e) { /* a dead view must not break routing */ } }
+      }
       /** Panel label for a routing record's source; 'notice' means no model ran. */
       const decisionSourceLabel = (source: string | null | undefined): string => {
         switch (source) {
@@ -221,7 +251,6 @@
         const show = (name: string) => tab === name
         const [upd, setUpd] = useState<any>(null)
         const [updBusy, setUpdBusy] = useState(false)
-        const [selAcct, setSelAcct] = useState<string | null>(null)
         const checkUpdate = useCallback(async () => {
           if (!remote) return
           setUpdBusy(true)
@@ -259,6 +288,19 @@
             vendor: next.config?.vendor ?? 'auto',
             enableMediaRouting: next.config?.enableMediaRouting !== false,
           })
+          publishState(next)
+        }, [])
+
+        // Follow switches made from the chat float without touching typed drafts.
+        useEffect(() => {
+          const fn = (next: any) => {
+            if (!alive.current || !next) return
+            setState(next)
+            setDraft((current: any) => current === null ? current : { ...current, sortStrategy: next.config?.sortStrategy ?? current.sortStrategy })
+          }
+          stateSubs.add(fn)
+          if (sharedState !== null) fn(sharedState)
+          return () => { stateSubs.delete(fn) }
         }, [])
 
         const load = useCallback(async () => {
@@ -396,11 +438,13 @@
         // ---- API account selection & management --------------------------------
         const accounts: any[] = cfg.accounts ?? []
         const activeAccountId: string = cfg.activeAccountId ?? ''
-        const accountSelectValue = selAcct ?? (activeAccountId !== ''
+        // No local sticky pick: resolve the selected connection from the live
+        // endpoint, so panel and chat float always show the same account.
+        const selectedConn = selectedConnOf(state, cfg)
+        const accountSelectValue = activeAccountId !== ''
           ? `acct:${activeAccountId}`
-          : state.adopted ? `conn:${state.adopted.entryId}|${state.adopted.providerId}` : '')
+          : selectedConn ? `conn:${selectedConn.entryId}|${selectedConn.providerId}` : ''
         const onAccountSelect = (value: string) => {
-          setSelAcct(value)
           if (value.startsWith('acct:')) {
             void mutate(() => remote.activateAccount(value.slice(5)), T('已切换账号并重新同步模型池', 'Account switched and pool resynced'))
           } else if (value.startsWith('conn:')) {
@@ -430,18 +474,11 @@
           const n = Number(raw)
           setLimit(id, 'maxTokens', raw.trim() === '' || !Number.isFinite(n) || n < 1 ? '' : String(Math.round(n * 10_000)))
         }
-        const VENDOR_LABELS: Record<string, string> = {
-          bailian: T('阿里云百炼', 'Aliyun Bailian'), siliconflow: T('硅基流动', 'SiliconFlow'), openrouter: 'OpenRouter',
-          volcengine: T('火山方舟', 'Volcengine'), zhipu: T('智谱', 'Zhipu'), moonshot: 'Moonshot', deepseek: 'DeepSeek',
-          generic: T('通用', 'Generic'), auto: T('自动', 'Auto'),
-        }
-        const connKey = (c: any): string => `${c.id}|${c.providerId}`
-        const connLabel = (c: any): string => (cfg?.connectionNames ?? {})[connKey(c)]
-          ?? `${VENDOR_LABELS[c.providerId] ?? c.providerId} · ${c.credentialRef ?? T('默认凭据', 'default credential')}`
+        const connLabel = (c: any): string => connLabelOf(c, cfg?.connectionNames)
         const saveConnName = (c: any) => {
           const names = { ...(cfg?.connectionNames ?? {}) }
-          if (renVal.trim() !== '') names[connKey(c)] = renVal.trim()
-          else delete names[connKey(c)]
+          if (renVal.trim() !== '') names[connKeyOf(c)] = renVal.trim()
+          else delete names[connKeyOf(c)]
           setRenKey(null)
           void mutate(() => remote.updateConfig({ connectionNames: names }), T('连接名称已保存', 'Connection name saved'))
         }
@@ -508,14 +545,10 @@
                   ...(state.connections ?? []).map((c: any) => ({ value: `conn:${c.id}|${c.providerId}`, label: connLabel(c) })),
                 ],
               }),
-              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('切换后自动重新同步模型池;台账按 key 记忆,同接口可继承', 'Switching resyncs the pool; ledger is per-key, same endpoint can inherit')),
+              h('span', { className: 'bar-muted', style: { fontSize: '11px' } }, T('切换后自动重新同步模型池;台账按 key 记忆,不跨 key 混算', 'Switching resyncs the pool; the ledger is per-key and never mixed across keys')),
             ),
             h('div', { className: 'bar-row bar-muted', style: { fontSize: '11px' } },
               h('span', null, T('本地台账: ', 'Local ledger: '), h('span', { className: 'bar-mono' }, `${state.keyLedger?.totalTokens ?? 0} tok · 周期 ${state.keyLedger?.cycle ?? 0}`)),
-              state.inheritSuggestion ? h('div', {
-                className: 'bar-btn', role: 'button',
-                onClick: () => void mutate(() => remote.inheritKeyLedger(state.inheritSuggestion.fromKeyId, state.keyLedger.keyId), T('已继承同接口旧 key 的台账', 'Inherited same-endpoint ledger')),
-              }, T(`继承旧 key 台账(${state.inheritSuggestion.totalTokens} tok)`, `Inherit old key ledger (${state.inheritSuggestion.totalTokens} tok)`)) : null,
             ),
             h('div', { className: 'bar-row bar-muted' },
               h('span', null, T('接口: ', 'Endpoint: '), h('span', { className: 'bar-mono' }, cfg.baseURL)),
@@ -535,8 +568,8 @@
               : null,
             state.adopted
               ? h('div', { className: 'bar-muted' }, T(
-                `已自动沿用 profile 中 ${state.adopted.entryId} → ${state.adopted.providerId} 的接口与凭据(无需重复配置)。`,
-                `Reusing the endpoint and credential of ${state.adopted.entryId} → ${state.adopted.providerId} from this profile.`,
+                `已自动沿用 profile 中 ${state.adopted.name ?? state.adopted.providerId}(${state.adopted.providerId})的接口与凭据(无需重复配置)。`,
+                `Reusing ${state.adopted.name ?? state.adopted.providerId} (${state.adopted.providerId}) from this profile.`,
               ))
               : (state.candidates ?? []).length > 0
                 ? h('div', { className: 'bar-muted' }, T(
@@ -597,30 +630,30 @@
           show('account') && (state.connections ?? []).length > 0 && h('div', { className: 'bar-card' },
             h('h4', null, T('检测到的连接(可改中文名 / 切换)', 'Discovered connections (rename / switch)')),
             h('div', { className: 'bar-muted', style: { fontSize: '11px' } }, T(
-              '「改名」设置你自己的中文名称,下拉与列表同步显示;「使用」切换该接口并重新同步模型池。同一接口多个 key 用名称区分。',
-              'Rename to your own label (shown in the dropdown and list); "Use" switches endpoint and resyncs the pool. Distinguish multiple keys on one endpoint by name.',
+              '「改名」设置你自己的显示名,下拉与列表统一显示「显示名: provider id」;冒号后是程序内部标识,凭据引用不再显示。同一接口多个 key 用名称区分。',
+              'Rename to your own label; dropdown and list show "display name: provider id". The id is internal; credential refs are hidden. Distinguish multiple keys on one endpoint by name.',
             )),
             h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } },
-              ...(state.connections ?? []).map((c: any) => h('div', { key: connKey(c), className: 'bar-history-item' },
+              ...(state.connections ?? []).map((c: any) => h('div', { key: connKeyOf(c), className: 'bar-history-item' },
                 h('div', { className: 'bar-row' },
                   h('strong', null, connLabel(c)),
-                  state.adopted && state.adopted.entryId === c.id && state.adopted.providerId === c.providerId ? h(Badge, { tone: 'ok', text: T('使用中', 'active') }) : null,
+                  selectedConn && String(selectedConn.baseURL ?? '').replace(/\/+$/, '') === String(c.baseURL ?? '').replace(/\/+$/, '') ? h(Badge, { tone: 'ok', text: T('使用中', 'active') }) : null,
                   h('span', { className: 'bar-muted bar-mono', style: { fontSize: '11px', wordBreak: 'break-all' } }, c.baseURL),
                 ),
                 h('div', { className: 'bar-row' },
-                  renKey === connKey(c) ? h('input', {
-                    className: 'bar-input', style: { width: '180px' }, value: renVal, placeholder: T('中文名称,如:主力key…', 'Custom name…'),
+                  renKey === connKeyOf(c) ? h('input', {
+                    className: 'bar-input', style: { width: '180px' }, value: renVal, placeholder: T('显示名,如:主力key…', 'Display name…'),
                     onChange: (e: any) => setRenVal(e.target.value),
                   }) : null,
-                  renKey === connKey(c)
+                  renKey === connKeyOf(c)
                     ? h('div', { className: 'bar-btn bar-btn-primary', role: 'button', onClick: () => saveConnName(c) }, T('保存', 'Save'))
                     : h('div', {
                       className: 'bar-btn', role: 'button',
-                      onClick: () => { setRenKey(connKey(c)); setRenVal((cfg?.connectionNames ?? {})[connKey(c)] ?? '') },
+                      onClick: () => { setRenKey(connKeyOf(c)); setRenVal((cfg?.connectionNames ?? {})[connKeyOf(c)] ?? '') },
                     }, T('改名', 'Rename')),
                   h('div', {
                     className: 'bar-btn', role: 'button',
-                    onClick: () => { setSelAcct(`conn:${connKey(c)}`); void mutate(() => remote.switchConnection(c.id, c.providerId), T('已切换连接并重新同步模型池', 'Connection switched and pool resynced')) },
+                    onClick: () => { void mutate(() => remote.switchConnection(c.id, c.providerId), T('已切换连接并重新同步模型池', 'Connection switched and pool resynced')) },
                   }, T('使用', 'Use')),
                 ),
               ))),
@@ -675,8 +708,8 @@
               '① Auto routing spends balance faster: hard questions go to stronger (pricier) models, costing more per query than a fixed cheap model, but with better results. Pick "Price first" to save.',
             )),
             h('div', { className: 'bar-muted' }, T(
-              '② 薅免费额度优先=每个模型先用满一桶免费额度再换下一个,把各家送的额度都薅一遍(比任何单一排序薅得多)。台账按 key 记忆:切换排序不重置,只有换 key 才重置;换 key 又换回可能使该 key 超出免费额度,建议配合厂商「用完即停」。同接口旧 key 可一键继承台账。',
-              '② Free-quota first drains one bucket per model before moving on, milking every vendor\'s free grant. The ledger is per-key: switching strategy never resets it, only a key change does; switching away and back may push a key past its free quota — pair with the vendor\'s "stop when exhausted". Same-endpoint old keys can inherit.',
+              '② 薅免费额度优先=每个模型先用满一桶免费额度再换下一个,把各家送的额度都薅一遍(比任何单一排序薅得多)。台账按 key 记忆:切换排序不重置,只有换 key 才重置;换 key 又换回可能使该 key 超出免费额度,建议配合厂商「用完即停」。',
+              '② Free-quota first drains one bucket per model before moving on, milking every vendor\'s free grant. The ledger is per-key: switching strategy never resets it, only a key change does; switching away and back may push a key past its free quota — pair with the vendor\'s "stop when exhausted".',
             )),
           ),
 
@@ -1091,47 +1124,109 @@
         )
       }
 
-      // ---- 0.7.2 右下角浮窗小组件(shell.overlay,全应用可见) ------------------
+      // ---- 0.9.0 右下角浮窗(全应用、与面板同一事实源、决策可视化) --------------
+      const TASK_LABELS_F: Record<string, string> = {
+        image: '图片分析', writing: '写作', translation: '翻译', code: '代码', reasoning: '推理', general: '通用',
+      }
+      const STRATEGY_LABELS_F: Record<string, string> = {
+        auto: '智能排序', price: '价格优先', capability: '能力优先', speed: '速度优先', free_quota: '薅免费额度',
+      }
       function FloatCard() {
         const [st, setSt] = useState<any>(null)
-        const [open, setOpen] = useState(true)
-        const [sel, setSel] = useState<string | null>(null)
-        useEffect(() => {
-          let disposed = false
-          const run = async () => {
-            try {
-              const r = clientCtx?.get?.(`remote.${NS}`) as BarRemoteApi | undefined
-              if (!r) return
-              const state = unwrap(await r.getState())
-              if (!disposed && state) setSt(state)
-            } catch (_e) { /* 浮窗保持安静 */ }
-          }
-          void run()
-          const timer = setInterval(() => { void run() }, 15_000)
-          return () => { disposed = true; clearInterval(timer) }
+        const viewportWidth = Number((globalThis as any).innerWidth ?? 1200)
+        const [open, setOpen] = useState<boolean>(viewportWidth >= 720)
+        const [busy, setBusy] = useState<string | null>(null)
+        const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+        const alive = useRef(true)
+        useEffect(() => () => { alive.current = false }, [])
+        const remote = useCallback(() => {
+          try { return clientCtx?.get?.(`remote.${NS}`) as BarRemoteApi | undefined } catch (_e) { return undefined }
         }, [])
-        const remote = () => clientCtx?.get?.(`remote.${NS}`) as BarRemoteApi | undefined
+        const pull = useCallback(async (silent = true) => {
+          const r = remote()
+          if (!r) return
+          try {
+            const next = unwrap(await r.getState())
+            if (alive.current && next) { setSt(next); publishState(next) }
+          } catch (error) {
+            if (!silent && alive.current) setMsg({ tone: 'err', text: `状态读取失败:${String((error as Error)?.message ?? error)}` })
+          }
+        }, [remote])
+        useEffect(() => {
+          void pull()
+          const timer = setInterval(() => { void pull() }, 8_000)
+          let off: any
+          try { off = clientCtx?.remote?.$on?.('settings/document-updated', () => { void pull() }) } catch (_e) { /* 宿主不支持该事件 */ }
+          return () => { alive.current = false; clearInterval(timer); try { off?.() } catch (_e) { /* ignore */ } }
+        }, [pull])
+        /** One RPC: adopt its returned state at once and always surface the outcome. */
+        const run = useCallback(async (label: string, fn: (r: BarRemoteApi) => Promise<any>, okText?: string) => {
+          const r = remote()
+          if (!r || busy !== null) return
+          setBusy(label); setMsg(null)
+          try {
+            const res = unwrap(await fn(r))
+            const next = res?.state ?? res
+            if (next && next.config) { setSt(next); publishState(next) }
+            else await pull()
+            if (res && res.ok === false) setMsg({ tone: 'err', text: `${label}失败:${res.message ?? '未知原因'}` })
+            else setMsg({ tone: 'ok', text: okText ?? `${label}已完成` })
+          } catch (error) {
+            setMsg({ tone: 'err', text: `${label}失败:${String((error as Error)?.message ?? error)}` })
+          }
+          if (alive.current) setBusy(null)
+        }, [remote, busy, pull])
         const cfg = st?.config ?? {}
         const accounts: any[] = cfg.accounts ?? []
         const conns: any[] = st?.connections ?? []
-        const VL: Record<string, string> = { bailian: '阿里云百炼', siliconflow: '硅基流动', openrouter: 'OpenRouter', volcengine: '火山方舟', zhipu: '智谱', moonshot: 'Moonshot', deepseek: 'DeepSeek', generic: '通用' }
-        const connLabel = (c: any) => (cfg.connectionNames ?? {})[`${c.id}|${c.providerId}`] ?? `${VL[c.providerId] ?? c.providerId} · ${c.credentialRef ?? '默认凭据'}`
-        const activeVal = sel ?? (cfg.activeAccountId ? `acct:${cfg.activeAccountId}` : st?.adopted ? `conn:${st.adopted.entryId}|${st.adopted.providerId}` : '')
+        const selectedConn = selectedConnOf(st, cfg)
+        const activeVal = cfg.activeAccountId
+          ? `acct:${cfg.activeAccountId}`
+          : selectedConn ? `conn:${selectedConn.entryId}|${selectedConn.providerId}` : ''
         const onPick = (v: string) => {
-          setSel(v)
-          const r = remote(); if (!r) return
-          if (v.startsWith('acct:')) void r.activateAccount(v.slice(5)).catch(() => { /* 面板会报错 */ })
-          else if (v.startsWith('conn:')) { const sep = v.indexOf('|'); void r.switchConnection(v.slice(5, sep), v.slice(sep + 1)).catch(() => { /* 同上 */ }) }
-          else void r.activateAccount('').catch(() => { /* 同上 */ })
+          if (v.startsWith('acct:')) void run('切换账号', r => r.activateAccount(v.slice(5)), '已切换账号,模型池已重新同步')
+          else if (v.startsWith('conn:')) {
+            const sep = v.indexOf('|')
+            void run('切换连接', r => r.switchConnection(v.slice(5, sep), v.slice(sep + 1)), '已切换连接,模型池已重新同步')
+          } else void run('恢复默认接口', r => r.activateAccount(''), '已恢复默认接口/自动沿用')
         }
         const cooling = (st?.quota ?? []).filter((q: any) => !q.available).length
-        const last = (st?.history ?? [])[0]
+        const history: any[] = st?.history ?? []
+        const last = history[0]
+        const recent = history.slice(0, 8).reverse()
+        const okCount = recent.filter(row => row.ok).length
+        const maxTok = Math.max(1, ...recent.map(row => Number(row.tokens) || 0))
+        const fmtClock = (ms: number): string => {
+          try { return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch (_e) { return '—' }
+        }
+        const sourceText = (row: any): string => row.decisionSource === 'model' ? '决策模型'
+          : row.decisionSource === 'heuristic' ? '规则判断'
+            : row.decisionSource === 'fallback' ? '决策超时回退'
+              : row.decisionSource === 'media' ? '媒体路由'
+                : row.decisionSource === 'notice' ? '未调用模型' : '—'
+        const chip = (text: string, tone: 'ok' | 'err' | 'plain' = 'plain') => h('span', {
+          style: {
+            display: 'inline-block', padding: '1px 6px', borderRadius: '999px', fontSize: '10px',
+            border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+            background: tone === 'ok' ? 'rgba(34,197,94,.12)' : tone === 'err' ? 'rgba(239,68,68,.12)' : 'var(--dsw-alias-bg-layer-2, #f5f5f5)',
+            color: tone === 'ok' ? '#15803d' : tone === 'err' ? '#b91c1c' : 'inherit',
+          },
+        }, text)
+        const node = (label: string, model: string, accent: boolean) => h('div', {
+          style: {
+            flex: '1 1 0', minWidth: 0, padding: '4px 6px', borderRadius: '6px',
+            border: `1px solid ${accent ? 'var(--dsw-alias-brand-primary, #2563eb)' : 'var(--dsw-alias-border-l2, #ddd)'}`,
+            background: accent ? 'rgba(37,99,235,.08)' : 'var(--dsw-alias-bg-layer-2, #f5f5f5)',
+          },
+        },
+          h('div', { className: 'bar-muted', style: { fontSize: '10px' } }, label),
+          h('div', { className: 'bar-muted', style: { fontSize: '10px', whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.3, maxHeight: '2.6em', overflow: 'hidden' }, title: model }, model))
         const box: any = {
-          position: 'fixed', right: '16px', bottom: '16px', zIndex: 900, pointerEvents: 'auto',
-          width: open ? '272px' : 'auto', background: 'var(--dsw-alias-bg-l1, #fff)',
+          position: 'fixed', right: '12px', bottom: '12px', zIndex: 900, pointerEvents: 'auto',
+          width: open ? '308px' : 'auto', maxWidth: 'calc(100vw - 24px)', background: 'var(--dsw-alias-bg-l1, #fff)',
           border: '1px solid var(--dsw-alias-border-l1, #ddd)', borderRadius: '12px',
           boxShadow: '0 6px 24px rgba(0,0,0,.18)', padding: '10px 12px', fontSize: '12px',
-          color: 'var(--dsw-alias-text-l1, #222)',
+          color: 'var(--dsw-alias-text-l1, #222)', boxSizing: 'border-box',
         }
         if (!open) return h('div', { style: { ...box, cursor: 'pointer' }, onClick: () => setOpen(true) },
           h('style', null, CSS),
@@ -1139,30 +1234,79 @@
           '智能路由')
         return h('div', { style: box },
           h('style', null, CSS),
-          h('div', { className: 'bar-row', style: { justifyContent: 'space-between' } },
-            h('strong', null, '智能路由'),
+          h('div', { className: 'bar-row', style: { justifyContent: 'space-between', gap: '8px' } },
+            h('strong', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+              h('span', { style: { display: 'inline-block', width: 7, height: 7, borderRadius: 4, background: st ? 'var(--dsw-alias-state-success-primary, #22c55e)' : '#999' } }),
+              '智能路由'),
             h('span', { className: 'bar-muted', style: { cursor: 'pointer' }, onClick: () => setOpen(false) }, '收起')),
-          h('div', {
-            className: 'bar-muted', style: { margin: '4px 0' },
-            title: st?.keyLedger ? `当前 key:${st.keyLedger.label}` : undefined,
-          },
+          h('div', { className: 'bar-muted', style: { margin: '4px 0', fontSize: '11px' }, title: st?.keyLedger ? `当前 key:${st.keyLedger.label}` : undefined },
             st ? `模型池 ${st.pool?.count ?? 0} · 冷却 ${cooling} · 台账 ${st.keyLedger?.totalTokens ?? 0} tok${(st.ledgersTotal ?? 0) !== (st.keyLedger?.totalTokens ?? 0) ? `(累计 ${st.ledgersTotal})` : ''}` : '状态载入中…'),
-          last ? h('div', { className: 'bar-muted bar-mono', style: { fontSize: '11px', marginBottom: '4px', wordBreak: 'break-all' } }, `上次 ${last.finalModel ?? '—'} · ${last.tokens ?? 0} tok`) : null,
-          h('div', { className: 'bar-row', style: { gap: '4px' } },
+
+          // ---- 上次决策可视化:任务 → 决策模型 → 执行模型 ----
+          last ? h('div', { style: { border: '1px solid var(--dsw-alias-border-l1, #eee)', borderRadius: '8px', padding: '8px', margin: '6px 0' } },
+            h('div', { className: 'bar-row', style: { justifyContent: 'space-between', gap: '6px' } },
+              h('span', { style: { fontWeight: 600 } }, '上次决策'),
+              h('span', { className: 'bar-muted', style: { fontSize: '9.5px', flexShrink: 0 } }, `${fmtClock(last.at)} · ${last.origin === 'user' ? '你指定' : '自动'}`)),
+            h('div', { className: 'bar-row', style: { gap: '4px', margin: '4px 0' } },
+              chip(TASK_LABELS_F[last.task] ?? last.task ?? '通用'),
+              chip(sourceText(last)),
+              chip(STRATEGY_LABELS_F[last.strategy] ?? last.strategy ?? '—'),
+              chip(last.ok ? '成功' : '失败', last.ok ? 'ok' : 'err')),
+            h('div', { style: { display: 'flex', alignItems: 'stretch', gap: '6px', margin: '4px 0' } },
+              node('决策模型', last.decisionModel ?? (last.decisionSource === 'heuristic' ? '规则判断' : '—'), false),
+              h('div', { style: { alignSelf: 'center', fontSize: '13px' } }, '→'),
+              node('执行模型', last.finalModel ?? '—', true)),
+            h('div', { className: 'bar-muted', style: { fontSize: '10px', marginTop: '4px' } }, [
+              `回答 ${last.tokens ?? 0} tok`,
+              last.decisionTokens ? `决策 ${last.decisionTokens} tok` : '',
+              (last.attempts?.length ?? 0) > 1 ? `试了 ${last.attempts.length} 个模型` : '',
+            ].filter(Boolean).join(' · ')),
+            last.reasoning ? h('div', {
+              style: { fontSize: '10px', marginTop: '3px', lineHeight: 1.35, color: 'var(--dsw-alias-text-l2, #666)', wordBreak: 'break-word' },
+              title: String(last.reasoning),
+            }, `理由:${String(last.reasoning).slice(0, 140)}${String(last.reasoning).length > 140 ? '…' : ''}`) : null)
+            : h('div', { className: 'bar-muted', style: { margin: '8px 0', fontSize: '11px' } },
+              '还没有路由记录 — 发一条消息后,这里会显示「任务 → 决策模型 → 执行模型」的分配结果。'),
+
+          // ---- 近 8 次迷你趋势 ----
+          recent.length > 0 ? h('div', { style: { margin: '4px 0 6px' } },
+            h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: '3px', height: '20px' } },
+              ...recent.map((row, index) => h('div', {
+                key: `${row.at}-${index}`,
+                title: `${fmtClock(row.at)} · ${TASK_LABELS_F[row.task] ?? row.task} · ${row.finalModel ?? '—'} · ${row.tokens ?? 0} tok · ${row.ok ? '成功' : '失败'}`,
+                style: {
+                  flex: '1 1 0', minWidth: '4px', height: `${Math.max(4, Math.round(((Number(row.tokens) || 0) / maxTok) * 18))}px`,
+                  background: row.ok ? 'rgba(34,197,94,.55)' : 'rgba(239,68,68,.6)', borderRadius: '2px',
+                },
+              }))),
+            h('div', { className: 'bar-muted', style: { fontSize: '10px', marginTop: '2px' } }, `近 ${recent.length} 次 · 成功 ${okCount}/${recent.length}`))
+            : null,
+
+          msg ? h('div', { className: msg.tone === 'ok' ? 'bar-ok' : 'bar-error', style: { fontSize: '11px', margin: '4px 0' } }, msg.text) : null,
+
+          h('div', { className: 'bar-row', style: { gap: '4px', marginTop: '4px' } },
             h('select', {
-              className: 'bar-input', style: { flex: 1 }, value: cfg.sortStrategy ?? 'auto',
-              onChange: (e: any) => { const r = remote(); if (r) void r.updateConfig({ sortStrategy: e.target.value }).catch(() => { /* 忽略 */ }) },
+              className: 'bar-input', style: { flex: 1, minWidth: 0 }, value: cfg.sortStrategy ?? 'auto', disabled: busy !== null,
+              onChange: (e: any) => void run('切换排序', r => r.updateConfig({ sortStrategy: e.target.value }), `排序已切换:${STRATEGY_LABELS_F[e.target.value] ?? e.target.value}`),
             },
               h('option', { value: 'auto' }, '智能排序'),
               h('option', { value: 'price' }, '价格优先'),
               h('option', { value: 'capability' }, '能力优先'),
               h('option', { value: 'speed' }, '速度优先'),
               h('option', { value: 'free_quota' }, '薅免费额度')),
-            h('div', { className: 'bar-btn', role: 'button', onClick: () => { const r = remote(); if (r) void r.refreshPool().catch(() => { /* 忽略 */ }) } }, '刷新')),
-          h('select', { className: 'bar-input', style: { width: '100%', marginTop: '4px' }, value: activeVal, onChange: (e: any) => onPick(e.target.value) },
+            h('div', {
+              className: 'bar-btn', role: 'button',
+              style: busy === '刷新模型池' ? { opacity: .6 } : undefined,
+              onClick: () => void run('刷新模型池', r => r.refreshPool(), '模型池已刷新'),
+            }, busy === '刷新模型池' ? '刷新中…' : '刷新')),
+          h('select', {
+            className: 'bar-input', style: { width: '100%', marginTop: '4px', minWidth: 0 },
+            value: activeVal, disabled: busy !== null, onChange: (e: any) => onPick(e.target.value),
+          },
             h('option', { value: '' }, '默认接口 / 自动沿用'),
             ...accounts.map((a: any) => h('option', { key: a.id, value: `acct:${a.id}` }, a.name)),
-            ...conns.map((c: any) => h('option', { key: `${c.id}|${c.providerId}`, value: `conn:${c.id}|${c.providerId}` }, connLabel(c)))),
+            ...conns.map((c: any) => h('option', { key: connKeyOf(c), value: `conn:${c.id}|${c.providerId}` }, connLabelOf(c, cfg.connectionNames))),
+          ),
         )
       }
 
@@ -1215,4 +1359,3 @@
     },
   })
 }
-

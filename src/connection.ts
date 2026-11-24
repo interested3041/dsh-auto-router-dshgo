@@ -20,6 +20,8 @@ export interface DiscoveredConnection {
   entryId: string
   /** Provider key inside that plugin's `providers` dictionary. */
   providerId: string
+  /** Provider display name from the profile (e.g. "PackyCode"); never a credential ref. */
+  name?: string
   baseURL: string
   apiKeyEnv?: string
 }
@@ -43,9 +45,12 @@ function connectionsOf(entryId: string, config: Record<string, unknown>): Discov
       const profile = asRecord(raw)
       const baseURL = typeof profile?.baseURL === 'string' ? profile.baseURL : undefined
       if (baseURL === undefined || !isRoutableEndpoint(baseURL)) continue
+      const name = typeof profile?.displayName === 'string' && profile.displayName.trim() !== ''
+        ? profile.displayName.trim() : undefined
       found.push({
         entryId,
         providerId,
+        ...(name === undefined ? {} : { name }),
         baseURL: baseURL.replace(/\/+$/, ''),
         ...(typeof profile?.apiKeyEnv === 'string' ? { apiKeyEnv: profile.apiKeyEnv } : {}),
       })
@@ -54,9 +59,12 @@ function connectionsOf(entryId: string, config: Record<string, unknown>): Discov
   // A flat harness-owned provider profile (for example a dedicated Bailian row).
   const baseURL = typeof config.baseURL === 'string' ? config.baseURL : undefined
   if (baseURL !== undefined && isRoutableEndpoint(baseURL)) {
+    const name = typeof config.displayName === 'string' && config.displayName.trim() !== ''
+      ? config.displayName.trim() : undefined
     found.push({
       entryId,
       providerId: entryId,
+      ...(name === undefined ? {} : { name }),
       baseURL: baseURL.replace(/\/+$/, ''),
       ...(typeof config.apiKeyEnv === 'string' ? { apiKeyEnv: config.apiKeyEnv } : {}),
     })

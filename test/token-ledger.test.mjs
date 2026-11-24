@@ -61,42 +61,6 @@ ok('resetBucket() zeroes all and bumps cycle', () => {
   assert.equal(store.state.ledgers['acct:a'].cycle, 1)
 })
 
-ok('hasLedger reflects existence', () => {
-  assert.equal(store.hasLedger('acct:a'), true)
-  assert.equal(store.hasLedger('acct:nope'), false)
-})
-
-ok('sameEndpointLedger finds same url other key', () => {
-  store.ledgerOf('acct:b', { label: 'B', baseURL: 'https://x/v1' })
-  const found = store.sameEndpointLedger('acct:b', 'https://x/v1')
-  assert.equal(found?.keyId, 'acct:a')
-})
-
-ok('sameEndpointLedger ignores trailing slash', () => {
-  assert.equal(store.sameEndpointLedger('acct:b', 'https://x/v1/')?.keyId, 'acct:a')
-})
-
-ok('sameEndpointLedger excludes the same key', () => {
-  assert.equal(store.sameEndpointLedger('acct:a', 'https://x/v1')?.keyId, 'acct:b')
-})
-
-ok('sameEndpointLedger undefined for other url', () => {
-  store.ledgerOf('acct:c', { label: 'C', baseURL: 'https://other/v1' })
-  assert.equal(store.sameEndpointLedger('acct:c', 'https://other/v1'), undefined)
-})
-
-ok('inheritLedger clones models/total/cycle', () => {
-  store.recordLedgerTokens('acct:a', 'm1', 700)
-  const target = store.inheritLedger('acct:a', 'acct:d', { label: 'D', baseURL: 'https://x/v1' })
-  assert.equal(target.models.m1.tokens, 2200)
-  assert.equal(target.totalTokens, store.state.ledgers['acct:a'].totalTokens)
-  assert.equal(target.inheritedFrom, 'acct:a')
-})
-
-ok('inheritLedger from missing source throws', () => {
-  assert.throws(() => store.inheritLedger('acct:ghost', 'acct:e', { baseURL: 'https://x/v1' }), /source ledger not found/)
-})
-
 ok('keyHistory is recency ordered', () => {
   store.ledgerOf('acct:e', { baseURL: 'https://x/v1' })
   assert.equal(store.state.keyHistory[0], 'acct:e')
@@ -126,7 +90,7 @@ await okAsync('flush persists ledgers to disk', async () => {
 
 await okAsync('reopen reads ledgers back', async () => {
   const again = await RouterStore.open(join(tmp, 'state.json'))
-  assert.equal(again.state.ledgers['acct:a'].models.m1.tokens, 2200)
+  assert.equal(again.state.ledgers['acct:a'].models.m1.tokens, 1500)
   await again.dispose()
 })
 
