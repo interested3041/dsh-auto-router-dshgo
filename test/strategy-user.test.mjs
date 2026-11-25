@@ -32,10 +32,10 @@ ok('capability descending', () => {
 ok('speed descending', () => {
   assert.deepEqual(orderCandidates(cands, 'speed').order, ['cheap-flash', 'mid-plus', 'flag-max'])
 })
-ok('free_quota with empty ledger prefers quality', () => {
+ok('free_quota with empty ledger starts from the cheapest/light model', () => {
   const r = orderCandidates(cands, 'free_quota', null, { bucketTokens: 1000, bucketTolerance: 0.05 })
   assert.equal(r.allFull, false)
-  assert.equal(r.order[0], 'flag-max')
+  assert.equal(r.order[0], 'cheap-flash')
 })
 
 const store = new RouterStore(mkdtempSync(join(tmpdir(), 'dsh-strat-')))

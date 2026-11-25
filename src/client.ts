@@ -309,12 +309,14 @@
           publishState(next)
         }, [])
 
-        // Follow switches made from the chat float without touching typed drafts.
+        // Follow live router state without overwriting an unsaved draft. The
+        // old implementation reapplied `sortStrategy` from the last server
+        // snapshot on every chat-float refresh, so a choice made in this panel
+        // could silently snap back to "auto" before the user pressed Save.
         useEffect(() => {
           const fn = (next: any) => {
             if (!alive.current || !next) return
             setState(next)
-            setDraft((current: any) => current === null ? current : { ...current, sortStrategy: next.config?.sortStrategy ?? current.sortStrategy })
           }
           stateSubs.add(fn)
           if (sharedState !== null) fn(sharedState)

@@ -62,10 +62,10 @@ ok('speed orders by speed desc', () => {
   const { order } = orderCandidates(cands, 'speed', undefined, opts)
   assert.deepEqual(order, ['qwen-turbo', 'deepseek-v4.1-flash-1017', 'deepseek-v4-pro'])
 })
-ok('free_quota all-empty prefers strongest', () => {
+ok('free_quota all-empty starts from the cheapest/light model', () => {
   const { order, allFull } = orderCandidates(cands, 'free_quota', undefined, opts)
   assert.equal(allFull, false)
-  assert.equal(order[0], 'deepseek-v4-pro')
+  assert.equal(order[0], 'qwen-turbo')
 })
 ok('free_quota picks least-consumed bucket', () => {
   const ledger = { keyId: 'k', label: 'k', baseURL: 'u', updatedAt: 0, totalTokens: 0, cycle: 0, models: {

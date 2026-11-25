@@ -72,9 +72,10 @@ const byQuality = (a: StrategyCandidate, b: StrategyCandidate): number =>
 
 /**
  * Order candidates under one strategy. Pure: never mutates the ledger.
- * `free_quota` prefers strong models while every bucket is empty, then the
- * least-consumed bucket, so each model gets ~one bucket of free quota before
- * the next one is used.
+ * `free_quota` spreads consumption by *utilization ratio* instead of draining
+ * one bucket at a time: while every bucket is empty it starts from the
+ * cheapest/light model, then the least-used model gets the next turn. Full
+ * buckets are parked at the tail.
  */
 export function orderCandidates(
   candidates: readonly StrategyCandidate[],
@@ -102,10 +103,13 @@ export function orderCandidates(
   if (notFull.length === 0) {
     return { order: list.sort(byQuality).map(c => c.id), allFull: true }
   }
+  const byLight = (a: StrategyCandidate, b: StrategyCandidate): number =>
+    priceOf(a.id) - priceOf(b.id) || byQuality(a, b)
+  const ratio = (c: StrategyCandidate): number => bucketOf(c.id) / Math.max(1, options.bucketTokens)
   const allZero = notFull.every(c => bucketOf(c.id) === 0)
   const head = notFull.sort(allZero
-    ? byQuality
-    : (a, b) => bucketOf(a.id) - bucketOf(b.id) || byQuality(a, b))
+    ? byLight
+    : (a, b) => ratio(a) - ratio(b) || byLight(a, b))
   const tail = list.filter(c => bucketOf(c.id) >= threshold).sort(byQuality)
   return { order: [...head, ...tail].map(c => c.id), allFull: false }
 }
