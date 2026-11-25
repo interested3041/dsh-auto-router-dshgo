@@ -709,7 +709,7 @@ const qwenOk = (body, res) => {
 // Scenario D leaves one deliberately unanswered request socket; force-close it.
 server.closeAllConnections?.()
 await new Promise(resolve => server.close(resolve))
-await rm(tmp, { recursive: true, force: true })
+await rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 
 let failed = 0
 for (const check of checks) {

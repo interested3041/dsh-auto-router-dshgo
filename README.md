@@ -27,6 +27,13 @@
 
 桌面用户请直接用 [`dsh-auto-router`](https://github.com/interested3041/dsh-auto-router)；本仓库仅供 dshgo / 移动端。
 
+### 0.7.2 学生 300 元券保护（2026-11-25）
+
+- **新增 `allowCouponIneligibleModels`，默认 `false`**：阿里云百炼端点上，学生认证 300 元券不能抵扣的模型族默认不进候选池，避免 Omni/语音/图像等调用直接扣现金、把余额扣成负数导致停机。
+- 默认排除 Omni 全模态、语音、OCR/翻译/角色/研究、向量排序、万相/Happy/图像和云市场三方模型；普通对话模型不受影响。
+- 只作用于百炼端点；硅基流动、OpenRouter 等其它厂商不套用这份排除表。
+- 面板「模型池与限额」新增中文开关，默认不勾选；需要这些能力时由用户自己打开，费用按现金结算。
+
 ### 0.6.0 缓存、路由与原地更新（2026-11-24）
 
 - **不再重装更新**：插件面板「更新到 vX」会下载 GitHub Release，校验版本后用 detached 脚本执行「停宿主 → 替换 lib → 重启」；`node_modules`、账号、`state.json`/`prefs.json` 全部保留。页面若没自动回来，在 DSH 里点一次「重启引擎」即可。
@@ -120,12 +127,32 @@
 | **额度用完自动换** | 429 / 额度耗尽 / 网络错误，在还没开始输出前悄悄换下一个模型；已经开始输出后失败则直接报错，不重复输出 |
 | **负载均衡** | 同类问题在几个差不多好的模型间按近期用量轮流用；用量相近时优先用更强的那个，不会一直薅一个旗舰 |
 | **画图** | 「画一张…」自动走图像生成接口，图片存到工作区 `.dsh-media/` 并回传链接 |
+| **学生券保护** | 默认不让学生 300 元券不能抵扣的全模态/语音/图像/向量/三方模型进池；需要时可在面板打开，费用现金结算 |
 | **视频提示** | 账号没有视频模型时，直接告诉你没有 + 给替代方案，不白烧 token 去写脚本；「视频脚本 / 分镜 / 封面 / 剪辑」这类要文稿或图的请求不会被误拦 |
 | **会话不跳模型** | 同一轮对话尽量固定一个模型，避免上下文缓存失效、工具调用格式漂移；长对话每 N 轮或上下文快满时重选 |
 | **换账号零配置** | 换个百炼账号，模型池和冷却自动重置；配置的模型在新账号不存在就自动替代并提示 |
 | **选 API 账号** | 面板顶部「当前 API 账号」下拉一键切换；可在插件里直接添加/保存/删除多厂商账号（端点 + API Key 或凭据引用），不用先去 DSH 设置里配 |
 | **面板** | 插件页能看模型池、冷却状态、最近 50 条路由记录，能改配置、刷新模型、管理并切换 API 账号 |
 | **运行时依赖由宿主提供** | 插件自身不带 `node_modules`，运行时用宿主自带的 `@deepseek-ai/dsh-llm` / `dsh-home-paths` / `schemastery`；桌面宿主天然可解析，移动端 proot 需补一次软链 |
+
+## 学生认证 300 元券（重要）
+
+如果你用的是阿里云「云工开物」学生认证 300 元抵扣金，先看这一节：
+
+- **券没丢，也不是所有模型都能抵**。2026-07-14 之后领取的 300 元券，官方明确有 8 类商品不支持抵扣：三方直供模型、Happy 系列、万相、向量排序、垂类、百聆语音、千问语音、千问全模态。官方页面给的是示例，**最终以账单里的「商品名称」为准**。
+- **插件默认不路由这些模型**。`allowCouponIneligibleModels=false` 时，`buildPool` 会按下列前缀把它们挡在候选池外，面板「查看被排除的模型」会标注「学生券不抵扣」：
+  - 全模态：`qwen3.5-omni*`、`qwen3.8-omni*`、`qwen3-omni*`、`qwen3-s2s*`
+  - 语音：`qwen3-asr*`、`qwen3-tts*`、`qwen-audio*`、`fun-asr*`、`fun-cosyvoice*`、`cosyvoice*`
+  - 垂类/OCR/翻译/角色/研究：`qwen-mt*`、`qwen3.5-ocr*`、`qwen-vl-ocr*`、`qwen3.8-livetranslate*`、`qwen3.5-livetranslate*`、`qwen3-livetranslate*`、`qwen-flash-character*`、`qwen-plus-character*`、`qwen-doc-turbo*`、`gui-plus*`、`qwen-deep-research*`、`qwen-deep-search-planning*`、`tongyi-xiaomi-analysis*`
+  - 向量/排序：`qwen3.7-text-embedding*`、`qwen3.7-text-rerank*`、`qwen3-vl-embedding*`、`qwen3-vl-rerank*`、`tongyi-embedding-vision*`
+  - 图像/视频/万相/Happy：`wan2.7*`、`wan3.0*`、`happyhorse*`、`qwen-image*`、`z-image*`
+  - 云市场三方：`vanchin/*`、`siliconflow/*`、`MiniMax/*`、`kimi/*`、`ZHIPU/*`、`stepfun/*`、`unisound/*`、`antdigital/*`、`Xing/*`、`xiaomi/*`、`cmaas-*`
+- **想用这些模型怎么办**：面板「模型池与限额」勾选「允许使用『学生 300 元券不抵扣』的模型（默认关闭）」，或把 `allowCouponIneligibleModels` 设为 `true`。打开后插件不再替你挡，产生的费用按现金结算。
+- **只对百炼生效**：硅基流动、OpenRouter、火山方舟等其它端点不会套用这份排除表。
+- **券是代金券，不是现金余额**：后付费会冻结当月消费，现金余额不足时，即使券里还有钱也可能停机；已经欠费停机的账户，券不能直接补欠费，需要先充值结清。
+- 官方规则：[账单查询与费用管理](https://help.aliyun.com/zh/model-studio/bill-query-and-cost-management)、[云工开物 300 元券说明](https://help.aliyun.com/zh/model-studio/introduction-to-yungongkaiwu)、[欠费处理](https://help.aliyun.com/zh/user-center/timely-handling-of-arrears)。
+
+> 如果券是 **2026-07-14 之前**领取的，排除规则可能不同，请先按账单「商品名称」核对，不要直接照这份清单停用。插件默认仍按保护策略排除，需要时再打开开关。
 
 ## 安装
 
@@ -184,6 +211,7 @@ sh /root/.dsh/plugins/dsh-auto-router-dshgo/scripts/link-host-deps.sh
 | `taskRoutes` | 内置表 | 各任务类型的**首选**模型（其后的由打分决定） |
 | `models` | `[]` | 自定义执行模型池（JSON），可覆盖视觉/上下文/标签 |
 | `excludeModels` | `[]` | 排除规则，支持 `前缀*` 通配 |
+| `allowCouponIneligibleModels` | `false` | 是否允许「学生 300 元券不抵扣」模型进池；默认关闭，仅百炼端点生效 |
 | `balanceStrategy` | `balanced` | `balanced` 按 token 轮转；`quality` 始终用最优 |
 | `balanceWindow` | `6` | 参与轮转的候选个数 |
 | `balanceBand` | `0` | 分数保护带（0=关闭），避免旗舰与低价小模型混排 |
@@ -244,7 +272,7 @@ sh /root/.dsh/plugins/dsh-auto-router-dshgo/scripts/link-host-deps.sh
 ```sh
 npm install
 npm run build      # tsc（宿主 + 客户端两套 tsconfig）+ 校验 client.js 为经典脚本（不含 ESM 语法）
-npm test           # 冒烟 + 分类/排序 + 路由 + 换账号 + 多账号管理 + 多厂商预设 + 均衡/档位/媒体/视频闸门/会话粘 + 额度上限，共 341 条断言
+npm test           # 冒烟 + 分类/排序 + 路由 + 换账号 + 多账号管理 + 多厂商预设 + 均衡/档位/媒体/视频闸门/会话粘 + 额度上限 + 学生券默认关闭/opt-in
 npm run test:live  # 用本机真实凭据与端点跑通完整链路（会计费，按需）
 ```
 

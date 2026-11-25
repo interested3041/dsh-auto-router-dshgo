@@ -21,6 +21,7 @@ export const PREFS_KEYS = [
   'decisionInputMaxChars', 'fallbackModel', 'maxAttempts', 'quotaCooldownMinutes',
   'rateLimitCooldownSeconds', 'streamIdleTimeoutMs', 'autoSyncPool', 'poolSyncIntervalHours',
   'adoptProfileProvider', 'maxCandidatesForDecision', 'includeSpecialEndpoints', 'excludeModels',
+  'allowCouponIneligibleModels',
   'balanceStrategy', 'sortStrategy', 'bucketTokens', 'bucketTolerance', 'balanceWindow',
   'balanceBand', 'balanceWindowHours', 'thinkingEffort', 'enableMediaRouting', 'stickySession',
   'sessionTurnLimit', 'taskRoutes', 'models', 'accounts', 'activeAccountId', 'modelLimits',
