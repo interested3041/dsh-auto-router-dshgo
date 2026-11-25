@@ -148,6 +148,7 @@ export interface ConfigView {
   maxCandidatesForDecision: number
   includeSpecialEndpoints: boolean
   excludeModels: string[]
+  allowCouponIneligibleModels: boolean
   taskRoutes: Record<string, string[]>
   models: ConfigModel[]
   /** Saved accounts, credentials masked (no raw key ever crosses the wire). */
@@ -232,7 +233,7 @@ export interface SelfCheckResult {
 
 /** Fields the panel may edit, with light type guards before persistence. */
 const STRING_FIELDS = ['baseURL', 'apiKeyEnv', 'decisionModel', 'fallbackModel'] as const
-const BOOL_FIELDS = ['enableDecision', 'autoSyncPool', 'includeSpecialEndpoints', 'enableMediaRouting', 'stickySession'] as const
+const BOOL_FIELDS = ['enableDecision', 'autoSyncPool', 'includeSpecialEndpoints', 'allowCouponIneligibleModels', 'enableMediaRouting', 'stickySession'] as const
 const NUMBER_FIELDS = [
   'decisionTimeoutMs', 'decisionInputMaxChars', 'maxAttempts', 'quotaCooldownMinutes',
   'rateLimitCooldownSeconds', 'streamIdleTimeoutMs', 'poolSyncIntervalHours', 'maxCandidatesForDecision',
@@ -255,6 +256,7 @@ export interface ConfigPatch {
   poolSyncIntervalHours?: number
   maxCandidatesForDecision?: number
   includeSpecialEndpoints?: boolean
+  allowCouponIneligibleModels?: boolean
   stickySession?: boolean
   sessionTurnLimit?: number
   excludeModels?: string[]
@@ -272,7 +274,7 @@ export interface ConfigPatch {
 }
 
 /** Sanitize one incoming patch; throws on unusable values. */
-function sanitizePatch(patch: unknown): Record<string, unknown> {
+export function sanitizePatch(patch: unknown): Record<string, unknown> {
   if (typeof patch !== 'object' || patch === null) throw new Error('patch must be an object')
   const input = patch as Record<string, unknown>
   const out: Record<string, unknown> = {}
@@ -576,6 +578,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
       maxCandidatesForDecision: options.maxCandidatesForDecision,
       includeSpecialEndpoints: options.includeSpecialEndpoints,
       excludeModels: [...options.excludeModels],
+      allowCouponIneligibleModels: options.allowCouponIneligibleModels,
       taskRoutes,
       models: options.models.map(model => ({ ...model })),
       accounts,

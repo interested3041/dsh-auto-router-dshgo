@@ -92,6 +92,13 @@ export interface Config {
   includeSpecialEndpoints: Volatile<boolean>
   /** Ids or `prefix*` patterns removed from the execution pool. */
   excludeModels: Volatile<string[]>
+  /**
+   * Allow Bailian model families whose bill product cannot use the student
+   * 300 yuan voucher (Omni/voice/OCR/image/third-party, etc.). Off by default
+   * so a student voucher does not silently spend cash; users without the
+   * voucher or who accept the charge can opt in from the panel.
+   */
+  allowCouponIneligibleModels: Volatile<boolean>
   /** `balanced` spreads load across equally suitable models; `quality` always takes the best. */
   balanceStrategy: Volatile<'balanced' | 'quality'>
   /** Candidate ordering: price / capability / speed / free-quota bucket rotation. */
@@ -179,6 +186,7 @@ export const Config = z.object({
   maxCandidatesForDecision: z.number().step(1).min(1).max(60).default(14).volatile(),
   includeSpecialEndpoints: z.boolean().default(false).volatile(),
   excludeModels: z.array(z.string()).default([]).volatile(),
+  allowCouponIneligibleModels: z.boolean().default(false).volatile(),
   balanceStrategy: z.union(['balanced', 'quality'] as const).default('balanced').volatile(),
   sortStrategy: z.union(['auto', 'price', 'capability', 'speed', 'free_quota'] as const).default('auto').volatile(),
   bucketTokens: z.number().step(1000).min(1000).max(100_000_000).default(1_000_000).volatile(),
@@ -221,6 +229,8 @@ export interface RouterOptions {
   readonly maxCandidatesForDecision: number
   readonly includeSpecialEndpoints: boolean
   readonly excludeModels: readonly string[]
+  /** Allow Bailian families whose bill product cannot use the student voucher. */
+  readonly allowCouponIneligibleModels: boolean
   readonly balanceStrategy: 'balanced' | 'quality'
   readonly sortStrategy: SortStrategy
   readonly bucketTokens: number
@@ -390,6 +400,7 @@ export function resolveOptions(config: Config): RouterOptions {
     excludeModels: (Array.isArray(plain(config.excludeModels)) ? plain(config.excludeModels) : [])
       .filter((pattern): pattern is string => typeof pattern === 'string' && pattern.trim().length > 0)
       .map(pattern => pattern.trim()),
+    allowCouponIneligibleModels: plain(config.allowCouponIneligibleModels) === true,
     balanceStrategy: plain(config.balanceStrategy) === 'quality' ? 'quality' : 'balanced',
     sortStrategy: (['auto', 'price', 'capability', 'speed', 'free_quota'] as const)
       .find(value => value === plain(config.sortStrategy)) ?? 'auto',
