@@ -1218,6 +1218,26 @@
         const userHistory = history.filter((row: any) => row?.utility !== true)
         const last = userHistory[0] ?? history[0]
         const recent = userHistory.slice(0, 8).reverse()
+        const sessionRows: any[] = last?.sessionId
+          ? userHistory.filter((row: any) => row.sessionId === last.sessionId).slice(0, 60)
+          : userHistory.slice(0, 12)
+        const countModels = (rows: any[], pick: (row: any) => string | null | undefined): [string, number][] => {
+          const counts = new Map<string, number>()
+          for (const row of rows) {
+            const model = pick(row)
+            if (model) counts.set(model, (counts.get(model) ?? 0) + 1)
+          }
+          return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        }
+        const executionModels = countModels(sessionRows, row => row.ok ? row.finalModel : undefined)
+        const decisionModels = countModels(sessionRows, row => row.decisionSource === 'model' ? row.decisionModel : undefined)
+        const decisionCalls = sessionRows.filter((row: any) => row.decisionSource === 'model').length
+        const directDecisions = sessionRows.filter((row: any) => row.decisionSource === 'heuristic'
+          || row.decisionSource === 'media' || row.decisionSource === 'notice').length
+        const decisionSummary = decisionCalls === 0
+          ? `决策模型：本会话未调用（规则直选 ${directDecisions} 次）`
+          : `决策模型：${decisionModels.slice(0, 3).map(([model, count]) => `${model} ×${count}`).join('、')}`
+            + (directDecisions > 0 ? `；其余 ${directDecisions} 次规则直选未调用` : '')
         const okCount = recent.filter(row => row.ok).length
         const maxTok = Math.max(1, ...recent.map(row => Number(row.tokens) || 0))
         const fmtClock = (ms: number): string => {
@@ -1234,6 +1254,7 @@
             border: '1px solid var(--dsw-alias-border-l2, #ddd)',
             background: tone === 'ok' ? 'rgba(34,197,94,.12)' : tone === 'err' ? 'rgba(239,68,68,.12)' : 'var(--dsw-alias-bg-layer-2, #f5f5f5)',
             color: tone === 'ok' ? '#15803d' : tone === 'err' ? '#b91c1c' : 'inherit',
+            maxWidth: '100%', whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.4,
           },
         }, text)
         const node = (label: string, model: string, accent: boolean) => h('div', {
@@ -1277,9 +1298,13 @@
               chip(STRATEGY_LABELS_F[last.strategy] ?? last.strategy ?? '—'),
               chip(last.ok ? '成功' : '失败', last.ok ? 'ok' : 'err')),
             h('div', { style: { display: 'flex', alignItems: 'stretch', gap: '6px', margin: '4px 0' } },
-              node('决策模型', last.decisionModel ?? (last.decisionSource === 'heuristic' ? '规则判断' : '—'), false),
+              node('决策模型', last.decisionModel
+                ?? (last.decisionSource === 'heuristic' ? '规则直选·未调用'
+                  : last.decisionSource === 'media' ? '媒体路由·未调用'
+                    : last.decisionSource === 'notice' ? '能力闸门·未调用'
+                      : last.decisionSource === 'fallback' ? '决策超时·未调用' : '—'), false),
               h('div', { style: { alignSelf: 'center', fontSize: '13px' } }, '→'),
-              node('执行模型', last.finalModel ?? '—', true)),
+              node('本次执行模型', last.finalModel ?? '—', true)),
             h('div', { className: 'bar-muted', style: { fontSize: '10px', marginTop: '4px' } }, [
               `输入 ${(last.inputTokens ?? 0) + (last.cacheReadTokens ?? 0)} tok`,
               `输出 ${last.outputTokens ?? last.tokens ?? 0} tok`,
@@ -1289,6 +1314,15 @@
               last.decisionTokens ? `决策 ${last.decisionTokens} tok` : '',
               (last.attempts?.length ?? 0) > 1 ? `试了 ${last.attempts.length} 个模型` : '',
             ].filter(Boolean).join(' · ')),
+            executionModels.length > 0 ? h('div', { style: { marginTop: '5px' } },
+              h('div', { className: 'bar-muted', style: { fontSize: '10px', marginBottom: '2px' } },
+                `${last.sessionId ? '本会话' : '最近'}成功执行模型（${sessionRows.length} 次请求）`),
+              h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '3px' } },
+                ...executionModels.slice(0, 8).map(([model, count]) => chip(`${model} ×${count}`, 'ok')),
+                executionModels.length > 8 ? chip(`另有 ${executionModels.length - 8} 个`, 'plain') : null),
+              h('div', { className: 'bar-muted', style: { fontSize: '10px', marginTop: '3px', lineHeight: 1.4, wordBreak: 'break-word' } },
+                decisionSummary + (decisionModels.length > 3 ? ` 等 ${decisionModels.length} 个决策模型` : '')))
+              : null,
             last.reasoning ? h('div', {
               style: { fontSize: '10px', marginTop: '3px', lineHeight: 1.35, color: 'var(--dsw-alias-text-l2, #666)', wordBreak: 'break-word' },
               title: String(last.reasoning),

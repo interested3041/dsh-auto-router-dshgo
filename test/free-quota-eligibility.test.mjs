@@ -41,6 +41,10 @@ ok('rotation accepts current lightweight aliases', () => {
 ok('rotation skips dated qwen-turbo snapshots that return AUTH', () => {
   assert.equal(rotationEligible('qwen-turbo-2024-11-01', traits({ version: 2024, snapshot: true })), false)
 })
+ok('rotation skips bare deepseek-v4.1-flash alias that returns AUTH', () => {
+  assert.equal(rotationEligible('deepseek-v4.1-flash', traits({ family: 'deepseek', version: 4.1 })), false)
+  assert.equal(rotationEligible('deepseek-v4.1-flash-1017', traits({ family: 'deepseek', version: 4.1, snapshot: true })), false)
+})
 ok('rotation skips cmaas and third-party prefixed ids', () => {
   assert.equal(rotationEligible('cmaas-qwen3.8-flash', traits({ version: 3.8 })), false)
   assert.equal(rotationEligible('antdigital/Ling-3.1-flash', traits({ family: 'ling', version: 3.1 })), false)

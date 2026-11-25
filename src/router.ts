@@ -4,12 +4,12 @@
  *
  * Failure policy (mirrors the requested dsh-llm-auto-style behavior):
  * - Before any chunk is emitted, retryable failures (QUOTA, RATE_LIMIT,
- *   SERVER, TRANSPORT, TIMEOUT, UNKNOWN_MODEL, INVALID_REQUEST,
+ *   SERVER, TRANSPORT, TIMEOUT, UNKNOWN_MODEL, INVALID_REQUEST, AUTH,
  *   EMPTY_RESPONSE, MALFORMED_RESPONSE, HTTP_429/5xx) mark the model's
  *   local quota cooldown and silently move to the next candidate.
  * - Once any chunk has been emitted, failures propagate (no duplicate output).
- * - AUTH / credential / CONTEXT_WINDOW_EXCEEDED failures are terminal for the
- *   whole request: another model would fail the same way.
+ * - CONTEXT_WINDOW_EXCEEDED is terminal for the whole request: another model
+ *   with the same window would fail the same way.
  */
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
@@ -78,6 +78,10 @@ export interface RouterSnapshot {
 /** Codes that justify trying the next candidate model. */
 const SWITCHABLE_CODES = new Set([
   'QUOTA', 'RATE_LIMIT', 'SERVER', 'TRANSPORT', 'TIMEOUT', 'UNKNOWN_MODEL',
+  // AUTH is often model-specific on MaaS accounts: a bare alias such as
+  // deepseek-v4.1-flash can 401 while its dated sibling -1017 works. Parking
+  // the bad id and trying the next candidate is safer than failing the turn.
+  'AUTH',
   // INVALID_REQUEST is often model-specific on MaaS accounts: a translation
   // endpoint rejects tools/history, an old model rejects the thinking field.
   // Treating it as terminal failed the whole turn without trying a healthy
@@ -424,6 +428,7 @@ export class Router {
         task: decision.task,
         modality: hasImageContent(options) ? 'image' : 'text',
         decisionSource: 'notice',
+        ...(sessionId !== undefined ? { sessionId } : {}),
         reasoning: decision.reasoning,
         attempts: [],
         ok: true,
@@ -441,6 +446,7 @@ export class Router {
         task: 'media',
         modality: 'text',
         decisionSource: 'media',
+        ...(sessionId !== undefined ? { sessionId } : {}),
         reasoning: decision.reasoning,
         attempts: [{ model: decision.media.model, ok: false }],
         ok: false,
@@ -463,7 +469,7 @@ export class Router {
       return
     }
     this.ctx.logger.info(
-      `[dsh-auto-router-dshgo] task=${decision.task} modality=${decisionSourceLabel(decision)} -> ${decision.chosen}`
+      `[dsh-auto-router] task=${decision.task} modality=${decisionSourceLabel(decision)} -> ${decision.chosen}`
       + (decision.reasoning ? ` | ${decision.reasoning}` : ''),
     )
     // DSH also calls the model for titles, summaries and tool-loop continuations.
@@ -484,6 +490,7 @@ export class Router {
       origin,
       strategy: snapshot.options.sortStrategy,
       keyId: snapshot.keyId,
+      ...(sessionId !== undefined ? { sessionId } : {}),
       attempts: [],
       ok: false,
     }
@@ -587,7 +594,7 @@ export class Router {
         if (sessionId !== undefined) this.store.dropSession(sessionId)
         lastError = failure
         this.ctx.logger.warn(
-          `[dsh-auto-router-dshgo] ${model} failed (${code}), cooldown ${Math.round(cooldownMs / 1000)}s; trying next candidate`,
+          `[dsh-auto-router] ${model} failed (${code}), cooldown ${Math.round(cooldownMs / 1000)}s; trying next candidate`,
         )
       }
     }
@@ -802,4 +809,3 @@ export function virtualContextWindow(snapshot: RouterSnapshot): number {
 export function taskRoutesOf(options: RouterOptions): Record<TaskType, readonly string[]> {
   return options.taskRoutes
 }
-

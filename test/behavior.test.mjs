@@ -17,6 +17,7 @@ const { RouterStore } = await lib('store.js')
 const { analyzeRequest, effortFor, reconcileReason, costCapFor } = await lib('decision.js')
 const { classifyModel } = await lib('classify.js')
 const { buildPool } = await lib('pool.js')
+const { resolveOptions } = await lib('config.js')
 
 process.env.BAILIAN_API_KEY = 'sk-balance'
 
@@ -43,6 +44,10 @@ check(analyse('比较 9.11 和 9.9 哪个大，并解释为什么').heuristicTas
 check(costCapFor(analyse('用 TypeScript 实现一个带过期时间的 LRU 缓存类，get/put 必须 O(1)')) === 4, '普通代码价格带上限为 4')
 check(costCapFor(analyse('重构这个 3000 行的 Python 脚本，拆分模块并补单元测试')) === 8, '复杂任务价格带上限为 8')
 check(costCapFor(analyse('请端到端完整实现这个分布式架构的性能优化与并发重构，覆盖故障排查、回滚、死锁和内存泄漏分析')) === 12, '深度任务才允许最高价格带')
+const defaultRoutes = resolveOptions({})
+check(defaultRoutes.userPinnedTasks.size === 0, '默认任务路由不算用户自定义，仍受成本上限约束')
+const customRoutes = resolveOptions({ taskRoutes: { writing: ['glm-5.2'] } })
+check(customRoutes.userPinnedTasks.has('writing'), '用户保存过的任务路由允许越过成本上限')
 
 const trivial = analyse('你好')
 const contextThenHello = analyzeRequest({
@@ -332,6 +337,7 @@ const sticky1 = await run('用 Python 写一个二分查找', { sessionId: 'sess
 const decisionCallsAfterFirst = calls.filter(call => call.stream !== true).length
 const sticky2 = await run('帮我写一段周报总结', { sessionId: 'sess-sticky' })
 check(sticky1.record?.finalModel !== undefined, '首轮记录了最终模型')
+check(sticky1.record?.sessionId === 'sess-sticky', '路由记录带上会话 id(浮窗可聚合同一对话)')
 check(sticky1.record?.finalModel === sticky2.record?.finalModel, '同会话任务变化仍固定同一模型')
 check(calls.filter(call => call.stream !== true).length === decisionCallsAfterFirst, '同会话第二轮跳过决策模型(省 token)')
 check(store.sessionModel('sess-sticky')?.task === analyse('帮我写一段周报总结').heuristicTask, '会话绑定记录了最新任务类型')

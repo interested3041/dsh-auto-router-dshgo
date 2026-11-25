@@ -100,6 +100,8 @@ export interface HistoryView {
   strategy: string
   /** Local ledger identity used. */
   keyId: string | null
+  /** Conversation/session that produced this record. */
+  sessionId: string | null
   /** Answer tokens consumed by the final model. */
   tokens: number
   /** Non-cached input tokens. */
@@ -492,6 +494,7 @@ async function stateView(ctx: HostContext, router: Router, store: RouterStore): 
     origin: record.origin ?? 'auto',
     strategy: record.strategy ?? 'auto',
     keyId: record.keyId ?? null,
+    sessionId: record.sessionId ?? null,
     tokens: record.tokens ?? 0,
     inputTokens: record.inputTokens ?? 0,
     outputTokens: record.outputTokens ?? 0,
@@ -688,7 +691,7 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
     // 0.8.0: mirror the resulting config into prefs.json so edits survive restarts.
     if (prefsFile !== undefined && captured !== undefined) {
       try { savePrefs(prefsFile, captured) } catch (error) {
-        ctx.logger.warn(`[dsh-auto-router-dshgo] prefs.json 写入失败:${String((error as Error)?.message ?? error)}`)
+        ctx.logger.warn(`[dsh-auto-router] prefs.json 写入失败:${String((error as Error)?.message ?? error)}`)
       }
     }
   }
@@ -889,4 +892,3 @@ export function createService(ctx: HostContext, router: Router, store: RouterSto
     },
   }
 }
-

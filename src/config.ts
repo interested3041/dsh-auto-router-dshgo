@@ -233,6 +233,12 @@ export interface RouterOptions {
   readonly stickySession: boolean
   readonly sessionTurnLimit: number
   readonly taskRoutes: Record<TaskType, readonly string[]>
+  /**
+   * Task types whose route the USER curated explicitly (a non-empty list in the
+   * profile that differs from the shipped default). Only these may bypass the
+   * cost cap: the shipped defaults are a recommended order, not user intent.
+   */
+  readonly userPinnedTasks: ReadonlySet<TaskType>
   readonly models: readonly ConfigModel[]
   /** User-saved Bailian accounts (credentials masked outside the router). */
   readonly accounts: readonly SavedAccount[]
@@ -304,6 +310,19 @@ export function resolveOptions(config: Config): RouterOptions {
       : [...DEFAULT_TASK_ROUTES[task]]
     if (taskRoutes[task].length === 0) taskRoutes[task] = [...DEFAULT_TASK_ROUTES[task]]
   }
+  // A route counts as user-pinned only when the profile supplied a non-empty
+  // list that differs from the shipped default; defaults stay price-gated.
+  const userPinnedTasks = new Set<TaskType>()
+  for (const task of TASK_TYPES) {
+    const supplied = taskRoutesRaw[task]
+    if (!Array.isArray(supplied) || supplied.length === 0) continue
+    const normalized = taskRoutes[task] ?? []
+    const shipped = DEFAULT_TASK_ROUTES[task]
+    const sameAsShipped = normalized.length === shipped.length
+      && normalized.every((id, index) => id === shipped[index])
+    if (!sameAsShipped) userPinnedTasks.add(task)
+  }
+
   const modelsRaw = plain(config.models) ?? []
   const models: ConfigModel[] = []
   const seen = new Set<string>()
@@ -385,6 +404,7 @@ export function resolveOptions(config: Config): RouterOptions {
     stickySession: plain(config.stickySession) !== false,
     sessionTurnLimit: positiveInt(Number(plain(config.sessionTurnLimit)), 50, 1),
     taskRoutes,
+    userPinnedTasks,
     models,
     accounts,
     activeAccountId: accounts.some(account => account.id === activeAccountId) ? activeAccountId : '',
