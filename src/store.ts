@@ -55,6 +55,8 @@ export interface RouteRecord {
   strategy?: string
   /** Local key identity the tokens were charged to. */
   keyId?: string
+  /** Conversation/session that produced this record (when the host sends one). */
+  sessionId?: string
   /** Execution tokens (input+output) charged for this request. */
   tokens?: number
   /** Non-cached input tokens billed for this request. */
@@ -342,7 +344,7 @@ export class RouterStore {
       this.state = sanitize(raw)
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-        console.warn(`[dsh-auto-router-dshgo] state file unreadable, starting fresh: ${String((error as Error)?.message ?? error)}`)
+        console.warn(`[dsh-auto-router] state file unreadable, starting fresh: ${String((error as Error)?.message ?? error)}`)
       }
     }
   }
@@ -671,7 +673,7 @@ export class RouterStore {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code
       if (code !== 'ENOENT') {
-        console.warn(`[dsh-auto-router-dshgo] state write failed: ${String((error as Error)?.message ?? error)}`)
+        console.warn(`[dsh-auto-router] state write failed: ${String((error as Error)?.message ?? error)}`)
       }
     }
   }
@@ -687,4 +689,3 @@ export class RouterStore {
     await this.flush()
   }
 }
-

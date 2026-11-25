@@ -9,6 +9,7 @@
  *  E. image input → vision-only candidate; a non-vision decision answer is
  *     rejected in favor of the heuristic vision model
  *  F. pool sync from GET /v1/models
+ *  E3. model-specific AUTH → park it and try the next candidate
  */
 import http from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -239,7 +240,7 @@ const streamOk = text => (body, res) => {
     },
     'qwen3.8-max': streamOk('额度切换'),
   }, calls)
-  const { router, store } = await makeRouter()
+  const { router, store } = await makeRouter({ taskRoutes: { writing: ['glm-5.2', 'qwen3.8-max'] } })
   const chunks = await collect(router.stream(userRequest('写一首诗'), router.capture()))
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
   assert(text === '额度切换!', 'B2: switched after allocation-quota error')
@@ -322,7 +323,8 @@ const streamOk = text => (body, res) => {
   const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
   assert(/图片描述/.test(text), 'E: a vision model served the image request')
   const execution = calls.find(c => c.stream === true)
-  assert(execution && /vl|omni|ocr|max-0902/i.test(execution.model), `E: execution model is vision-capable (${execution?.model})`)
+  const executedTraits = router.capture().pool.byId.get(execution?.model ?? '')?.traits
+  assert(executedTraits?.vision === true, `E: execution model is vision-capable (${execution?.model})`)
   const record = store.state.history.at(-1)
   assert(record?.modality === 'image' && record.task === 'image', 'E: recorded as image task')
   // The serialized wire message must carry the image placeholder (no attachment service in test).
@@ -350,6 +352,28 @@ const streamOk = text => (body, res) => {
   assert(record?.attempts[0]?.code === 'INVALID_REQUEST' && record.attempts.length >= 2, 'E2: invalid model and fallback both recorded')
   const q = store.state.quota['glm-5.2']
   assert(q?.cooldownUntil > Date.now() + 5 * 3_600_000, 'E2: invalid model parked for at least 6h')
+}
+
+// ---- Scenario E3: model-specific AUTH → next candidate still runs ----------
+{
+  const calls = []
+  handler = behaviorHandler({
+    'glm-5.2': (body, res) => {
+      if (!body.stream) return
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { code: 'InvalidApiKey', message: 'Invalid API-key provided.' } }))
+    },
+    'deepseek-v4.1-flash': streamOk('坏 key 模型后仍成功'),
+  }, calls)
+  const { router, store } = await makeRouter()
+  store.state.pendingUserModel = 'glm-5.2'
+  const chunks = await collect(router.stream(userRequest('写一段普通总结'), router.capture()))
+  const text = chunks.filter(c => c.type === 'text-delta').map(c => c.text).join('')
+  assert(text === '坏 key 模型后仍成功!', 'E3: known-good fallback served after model-specific AUTH')
+  const record = store.state.history.at(-1)
+  assert(record?.attempts[0]?.code === 'AUTH' && record.attempts.length >= 2, 'E3: auth model and fallback both recorded')
+  const q = store.state.quota['glm-5.2']
+  assert(q?.cooldownUntil > Date.now() + 5 * 3_600_000, 'E3: auth-bad model parked for at least 6h')
 }
 
 // ---- Scenario F: pool sync ------------------------------------------------------
