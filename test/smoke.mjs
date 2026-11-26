@@ -33,6 +33,10 @@ try {
 assert(classicScriptOk, 'lib/client.js parses as a classic script (no ESM syntax)')
 assert(!/^\s*(?:import\s|export\s)/m.test(clientSource), 'lib/client.js contains no import/export statements')
 assert(clientSource.includes('__ModuleLoader__.load'), 'lib/client.js self-registers with the module loader')
+assert(clientSource.includes('useSessions') && clientSource.includes('retainedBy?.mainView'), 'client scopes the floating card to the main-view session')
+assert(clientSource.includes('本会话还没有路由记录'), 'client has a current-session empty state')
+assert(clientSource.includes('beginFloatDrag') && clientSource.includes('saveFloatPos'), 'float pill drag handlers are compiled')
+assert(clientSource.includes('pointerdown') && clientSource.includes('cardRef'), 'outside pointerdown collapses the float card')
 
 // 2. Host entry exports the loader contract.
 const host = await import(pathToFileURL(join(root, '..', 'lib', 'index.js')).href)
